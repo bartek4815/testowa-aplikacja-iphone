@@ -25,8 +25,9 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     padding: 24px;
+    padding-top: max(32px, env(safe-area-inset-top));
     gap: 20px;
   }
   .display-text {
@@ -68,6 +69,107 @@
     background: #1d4ed8;
     transform: scale(0.98);
   }
+  #scanButton {
+    width: 100%;
+    max-width: 320px;
+    padding: 16px;
+    font-size: 18px;
+    font-weight: 600;
+    color: #ffffff;
+    background: #16a34a;
+    border: none;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #scanButton:active {
+    background: #15803d;
+    transform: scale(0.98);
+  }
+
+  /* Pelnoekranowy podglad kamery ze skanerem kodow kreskowych */
+  #scannerOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: #000000;
+    z-index: 9999;
+  }
+  #scannerOverlay.active {
+    display: block;
+  }
+  #scannerVideo {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: #000000;
+  }
+  #scannerCloseButton {
+    position: absolute;
+    top: max(16px, env(safe-area-inset-top));
+    right: 16px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.45);
+    color: #ffffff;
+    font-size: 20px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #scannedCodeDisplay {
+    position: absolute;
+    top: max(64px, calc(env(safe-area-inset-top) + 48px));
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 88%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #ffffff;
+    padding: 10px 18px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+    word-break: break-word;
+  }
+  #confirmScanButton {
+    position: absolute;
+    bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px));
+    left: 50%;
+    transform: translateX(-50%);
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.22);
+    border: 2px solid rgba(255, 255, 255, 0.65);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.4;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #confirmScanButton.ready {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #confirmScanButton svg {
+    width: 34px;
+    height: 34px;
+  }
 </style>
 </head>
 <body>
@@ -75,8 +177,28 @@
   <div id="displayText" class="display-text">Witaj!</div>
   <input type="text" id="userInput" placeholder="Wpisz tutaj tekst..." autocomplete="off" autocapitalize="off">
   <button id="clickButton">Kliknij mnie</button>
+  <button id="scanButton">📷 Skanuj kod kreskowy</button>
 </div>
 
+<div id="scannerOverlay">
+  <video id="scannerVideo" autoplay playsinline muted></video>
+  <button id="scannerCloseButton" aria-label="Zamknij skaner">✕</button>
+  <div id="scannedCodeDisplay">Szukam kodu...</div>
+  <button id="confirmScanButton" aria-label="Wpisz odczytany kod">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="4" width="1.6" height="16" fill="#ffffff"/>
+      <rect x="5" y="4" width="0.8" height="16" fill="#ffffff"/>
+      <rect x="7" y="4" width="1.6" height="16" fill="#ffffff"/>
+      <rect x="10" y="4" width="0.8" height="16" fill="#ffffff"/>
+      <rect x="12" y="4" width="2.2" height="16" fill="#ffffff"/>
+      <rect x="15.5" y="4" width="0.8" height="16" fill="#ffffff"/>
+      <rect x="17.5" y="4" width="1.6" height="16" fill="#ffffff"/>
+      <rect x="20.5" y="4" width="1.2" height="16" fill="#ffffff"/>
+    </svg>
+  </button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js"></script>
 <script>
   document.getElementById('clickButton').addEventListener('click', function () {
     var val = document.getElementById('userInput').value;
@@ -90,6 +212,59 @@
       });
     });
   }
+
+  // --- Skaner kodow kreskowych ---
+  var scannerOverlay = document.getElementById('scannerOverlay');
+  var scannedCodeDisplay = document.getElementById('scannedCodeDisplay');
+  var confirmScanButton = document.getElementById('confirmScanButton');
+  var scanButton = document.getElementById('scanButton');
+  var scannerCloseButton = document.getElementById('scannerCloseButton');
+  var codeReader = (typeof ZXing !== 'undefined') ? new ZXing.BrowserMultiFormatReader() : null;
+  var lastDecodedText = null;
+
+  function openScanner() {
+    if (!codeReader) {
+      alert('Skaner kodow nie zaladowal sie (brak polaczenia z internetem przy pierwszym uruchomieniu).');
+      return;
+    }
+    lastDecodedText = null;
+    scannedCodeDisplay.textContent = 'Szukam kodu...';
+    confirmScanButton.classList.remove('ready');
+    scannerOverlay.classList.add('active');
+
+    codeReader.decodeFromConstraints(
+      { video: { facingMode: { ideal: 'environment' } } },
+      'scannerVideo',
+      function (result, err) {
+        if (result) {
+          lastDecodedText = result.getText();
+          scannedCodeDisplay.textContent = lastDecodedText;
+          confirmScanButton.classList.add('ready');
+        }
+      }
+    ).catch(function (err) {
+      scannedCodeDisplay.textContent = 'Brak dostepu do aparatu.';
+      console.log('Blad uruchomienia kamery:', err);
+    });
+  }
+
+  function closeScanner() {
+    if (codeReader) {
+      codeReader.reset();
+    }
+    scannerOverlay.classList.remove('active');
+  }
+
+  scanButton.addEventListener('click', openScanner);
+  scannerCloseButton.addEventListener('click', closeScanner);
+
+  confirmScanButton.addEventListener('click', function () {
+    if (!lastDecodedText) {
+      return;
+    }
+    document.getElementById('userInput').value = lastDecodedText;
+    closeScanner();
+  });
 </script>
 </body>
 </html>
