@@ -162,6 +162,23 @@
     word-break: break-word;
     z-index: 2;
   }
+  #scannerDebugInfo {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: max(230px, calc(env(safe-area-inset-bottom) + 214px));
+    max-height: 90px;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.55);
+    color: #a7f3d0;
+    font-family: monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    padding: 8px 10px;
+    border-radius: 10px;
+    z-index: 2;
+    word-break: break-word;
+  }
   #confirmScanButton {
     position: absolute;
     bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px));
@@ -227,6 +244,8 @@
 
   <div id="scannedCodeDisplay">Szukam kodu...</div>
 
+  <div id="scannerDebugInfo">Wczytywanie mozliwosci kamery...</div>
+
   <button id="confirmScanButton" aria-label="Wpisz odczytany kod">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
       <rect x="2" y="4" width="1.6" height="16" fill="#ffffff"/>
@@ -264,6 +283,7 @@
   var scanButton = document.getElementById('scanButton');
   var scannerCloseButton = document.getElementById('scannerCloseButton');
   var torchButton = document.getElementById('torchButton');
+  var scannerDebugInfo = document.getElementById('scannerDebugInfo');
 
   var codeReader = (typeof ZXing !== 'undefined') ? new ZXing.BrowserMultiFormatReader() : null;
   var lastDecodedText = null;
@@ -279,6 +299,7 @@
     torchOn = false;
     supportsManualFocus = false;
     supportsSingleShotFocus = false;
+    scannerDebugInfo.textContent = 'Wczytywanie mozliwosci kamery...';
   }
 
   function setupTrackControls() {
@@ -302,6 +323,10 @@
       supportsManualFocus = currentCapabilities.focusMode.indexOf('manual') !== -1;
       supportsSingleShotFocus = currentCapabilities.focusMode.indexOf('single-shot') !== -1;
     }
+
+    // Diagnostyka - pokazuje dokladnie, co ten telefon/przegladarka zglasza jako mozliwosci kamery
+    var settings = (typeof currentTrack.getSettings === 'function') ? currentTrack.getSettings() : {};
+    scannerDebugInfo.textContent = 'capabilities: ' + JSON.stringify(currentCapabilities) + '  |  settings: ' + JSON.stringify(settings);
   }
 
   function startScanning() {
@@ -312,7 +337,17 @@
     scannedCodeDisplay.textContent = 'Szukam kodu...';
     confirmScanButton.classList.remove('ready');
 
-    var constraints = { video: { facingMode: { ideal: 'environment' } } };
+    // Wyzsza rozdzielczosc + wymuszenie ciaglego autofokusu juz na starcie strumienia -
+    // na wielu telefonach z Androidem niska/domyslna rozdzielczosc wybiera "podgladowy"
+    // profil kamery, w ktorym sterownik w ogole nie uruchamia autofokusu
+    var constraints = {
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        advanced: [{ focusMode: 'continuous' }]
+      }
+    };
 
     codeReader.decodeFromConstraints(constraints, 'scannerVideo', function (result, err) {
       if (result) {
