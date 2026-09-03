@@ -162,31 +162,6 @@
     word-break: break-word;
     z-index: 2;
   }
-  #zoomControl {
-    display: none;
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    bottom: max(140px, calc(env(safe-area-inset-bottom) + 124px));
-    width: 80%;
-    max-width: 320px;
-    align-items: center;
-    gap: 10px;
-    background: rgba(0, 0, 0, 0.4);
-    padding: 8px 14px;
-    border-radius: 20px;
-    z-index: 2;
-  }
-  #zoomControl.visible {
-    display: flex;
-  }
-  #zoomControl span {
-    color: #ffffff;
-    font-size: 14px;
-  }
-  #zoomRange {
-    flex: 1;
-  }
   #confirmScanButton {
     position: absolute;
     bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px));
@@ -247,17 +222,10 @@
 
   <div id="scannerTopLeftControls">
     <button id="torchButton" class="scannerIconButton" aria-label="Wlacz/wylacz latarke" hidden>🔦</button>
-    <button id="lensSwitchButton" class="scannerIconButton" aria-label="Zmien obiektyw" hidden>🔁</button>
   </div>
   <button id="scannerCloseButton" class="scannerIconButton" aria-label="Zamknij skaner">✕</button>
 
   <div id="scannedCodeDisplay">Szukam kodu...</div>
-
-  <div id="zoomControl">
-    <span>🔍-</span>
-    <input type="range" id="zoomRange" min="1" max="1" step="0.1" value="1">
-    <span>🔍+</span>
-  </div>
 
   <button id="confirmScanButton" aria-label="Wpisz odczytany kod">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -296,23 +264,12 @@
   var scanButton = document.getElementById('scanButton');
   var scannerCloseButton = document.getElementById('scannerCloseButton');
   var torchButton = document.getElementById('torchButton');
-  var lensSwitchButton = document.getElementById('lensSwitchButton');
-  var zoomControl = document.getElementById('zoomControl');
-  var zoomRange = document.getElementById('zoomRange');
 
-  var zxingHints = null;
-  if (typeof ZXing !== 'undefined') {
-    zxingHints = new Map();
-    // TRY_HARDER: dokladniejsza analiza klatki, lepiej radzi sobie z przekrzywionymi/skosnymi kodami
-    zxingHints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  }
-  var codeReader = (typeof ZXing !== 'undefined') ? new ZXing.BrowserMultiFormatReader(zxingHints) : null;
+  var codeReader = (typeof ZXing !== 'undefined') ? new ZXing.BrowserMultiFormatReader() : null;
   var lastDecodedText = null;
   var currentTrack = null;
   var currentCapabilities = null;
   var torchOn = false;
-  var backCameraDevices = [];
-  var currentDeviceIndex = 0;
   var supportsManualFocus = false;
   var supportsSingleShotFocus = false;
 
@@ -320,8 +277,6 @@
     torchButton.hidden = true;
     torchButton.classList.remove('active');
     torchOn = false;
-    lensSwitchButton.hidden = true;
-    zoomControl.classList.remove('visible');
     supportsManualFocus = false;
     supportsSingleShotFocus = false;
   }
@@ -342,15 +297,6 @@
       torchButton.hidden = false;
     }
 
-    // Zoom - suwak pokazuje sie tylko gdy telefon/przegladarka zglasza taka mozliwosc
-    if (currentCapabilities.zoom) {
-      zoomRange.min = currentCapabilities.zoom.min;
-      zoomRange.max = currentCapabilities.zoom.max;
-      zoomRange.step = currentCapabilities.zoom.step || 0.1;
-      zoomRange.value = currentTrack.getSettings().zoom || currentCapabilities.zoom.min;
-      zoomControl.classList.add('visible');
-    }
-
     // Reczne ogniskowanie po tapnieciu - wsparcie eksperymentalne, glownie Android/Chrome
     if (Array.isArray(currentCapabilities.focusMode)) {
       supportsManualFocus = currentCapabilities.focusMode.indexOf('manual') !== -1;
@@ -358,20 +304,7 @@
     }
   }
 
-  function listBackCameras() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-      return Promise.resolve([]);
-    }
-    return navigator.mediaDevices.enumerateDevices().then(function (devices) {
-      var videoInputs = devices.filter(function (d) { return d.kind === 'videoinput'; });
-      var backOnly = videoInputs.filter(function (d) {
-        return !/front|przod|user/i.test(d.label);
-      });
-      return backOnly.length > 0 ? backOnly : videoInputs;
-    });
-  }
-
-  function startScanning(deviceId) {
+  function startScanning() {
     if (!codeReader) {
       return;
     }
@@ -379,9 +312,7 @@
     scannedCodeDisplay.textContent = 'Szukam kodu...';
     confirmScanButton.classList.remove('ready');
 
-    var constraints = deviceId
-      ? { video: { deviceId: { exact: deviceId } } }
-      : { video: { facingMode: { ideal: 'environment' } } };
+    var constraints = { video: { facingMode: { ideal: 'environment' } } };
 
     codeReader.decodeFromConstraints(constraints, 'scannerVideo', function (result, err) {
       if (result) {
@@ -402,13 +333,7 @@
     }
     resetControlsUi();
     scannerOverlay.classList.add('active');
-    startScanning(null);
-
-    listBackCameras().then(function (cams) {
-      backCameraDevices = cams;
-      currentDeviceIndex = 0;
-      lensSwitchButton.hidden = cams.length < 2;
-    });
+    startScanning();
   }
 
   function closeScanner() {
@@ -445,27 +370,6 @@
     }).catch(function (err) {
       torchOn = !torchOn;
       console.log('Latarka niedostepna:', err);
-    });
-  });
-
-  lensSwitchButton.addEventListener('click', function () {
-    if (backCameraDevices.length < 2) {
-      return;
-    }
-    currentDeviceIndex = (currentDeviceIndex + 1) % backCameraDevices.length;
-    if (codeReader) {
-      codeReader.reset();
-    }
-    startScanning(backCameraDevices[currentDeviceIndex].deviceId);
-  });
-
-  zoomRange.addEventListener('input', function () {
-    if (!currentTrack) {
-      return;
-    }
-    var val = parseFloat(zoomRange.value);
-    currentTrack.applyConstraints({ advanced: [{ zoom: val }] }).catch(function (err) {
-      console.log('Zoom niedostepny:', err);
     });
   });
 
