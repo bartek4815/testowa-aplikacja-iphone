@@ -97,6 +97,7 @@
     inset: 0;
     background: #000000;
     z-index: 9999;
+    overflow: hidden;
   }
   #scannerOverlay.active {
     display: block;
@@ -110,22 +111,40 @@
     object-fit: cover;
     background: #000000;
   }
-  #scannerCloseButton {
-    position: absolute;
-    top: max(16px, env(safe-area-inset-top));
-    right: 16px;
+  .scannerIconButton {
     width: 40px;
     height: 40px;
     border-radius: 50%;
     border: none;
     background: rgba(0, 0, 0, 0.45);
     color: #ffffff;
-    font-size: 20px;
+    font-size: 18px;
     line-height: 1;
     display: flex;
     align-items: center;
     justify-content: center;
     -webkit-tap-highlight-color: transparent;
+  }
+  .scannerIconButton.active {
+    background: rgba(250, 204, 21, 0.85);
+    color: #1f2937;
+  }
+  .scannerIconButton[hidden] {
+    display: none;
+  }
+  #scannerTopLeftControls {
+    position: absolute;
+    top: max(16px, env(safe-area-inset-top));
+    left: 16px;
+    display: flex;
+    gap: 10px;
+    z-index: 3;
+  }
+  #scannerCloseButton {
+    position: absolute;
+    top: max(16px, env(safe-area-inset-top));
+    right: 16px;
+    z-index: 3;
   }
   #scannedCodeDisplay {
     position: absolute;
@@ -141,6 +160,32 @@
     font-weight: 600;
     text-align: center;
     word-break: break-word;
+    z-index: 2;
+  }
+  #zoomControl {
+    display: none;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: max(140px, calc(env(safe-area-inset-bottom) + 124px));
+    width: 80%;
+    max-width: 320px;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 8px 14px;
+    border-radius: 20px;
+    z-index: 2;
+  }
+  #zoomControl.visible {
+    display: flex;
+  }
+  #zoomControl span {
+    color: #ffffff;
+    font-size: 14px;
+  }
+  #zoomRange {
+    flex: 1;
   }
   #confirmScanButton {
     position: absolute;
@@ -161,6 +206,7 @@
     pointer-events: none;
     transition: opacity 0.15s ease;
     -webkit-tap-highlight-color: transparent;
+    z-index: 3;
   }
   #confirmScanButton.ready {
     opacity: 1;
@@ -169,6 +215,22 @@
   #confirmScanButton svg {
     width: 34px;
     height: 34px;
+  }
+  .focusRipple {
+    position: absolute;
+    width: 64px;
+    height: 64px;
+    margin-left: -32px;
+    margin-top: -32px;
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    border-radius: 50%;
+    z-index: 2;
+    pointer-events: none;
+    animation: focusRippleAnim 0.6s ease-out forwards;
+  }
+  @keyframes focusRippleAnim {
+    0% { transform: scale(1.3); opacity: 1; }
+    100% { transform: scale(0.85); opacity: 0; }
   }
 </style>
 </head>
@@ -182,8 +244,21 @@
 
 <div id="scannerOverlay">
   <video id="scannerVideo" autoplay playsinline muted></video>
-  <button id="scannerCloseButton" aria-label="Zamknij skaner">✕</button>
+
+  <div id="scannerTopLeftControls">
+    <button id="torchButton" class="scannerIconButton" aria-label="Wlacz/wylacz latarke" hidden>🔦</button>
+    <button id="lensSwitchButton" class="scannerIconButton" aria-label="Zmien obiektyw" hidden>🔁</button>
+  </div>
+  <button id="scannerCloseButton" class="scannerIconButton" aria-label="Zamknij skaner">✕</button>
+
   <div id="scannedCodeDisplay">Szukam kodu...</div>
+
+  <div id="zoomControl">
+    <span>🔍-</span>
+    <input type="range" id="zoomRange" min="1" max="1" step="0.1" value="1">
+    <span>🔍+</span>
+  </div>
+
   <button id="confirmScanButton" aria-label="Wpisz odczytany kod">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
       <rect x="2" y="4" width="1.6" height="16" fill="#ffffff"/>
@@ -215,36 +290,124 @@
 
   // --- Skaner kodow kreskowych ---
   var scannerOverlay = document.getElementById('scannerOverlay');
+  var scannerVideo = document.getElementById('scannerVideo');
   var scannedCodeDisplay = document.getElementById('scannedCodeDisplay');
   var confirmScanButton = document.getElementById('confirmScanButton');
   var scanButton = document.getElementById('scanButton');
   var scannerCloseButton = document.getElementById('scannerCloseButton');
-  var codeReader = (typeof ZXing !== 'undefined') ? new ZXing.BrowserMultiFormatReader() : null;
+  var torchButton = document.getElementById('torchButton');
+  var lensSwitchButton = document.getElementById('lensSwitchButton');
+  var zoomControl = document.getElementById('zoomControl');
+  var zoomRange = document.getElementById('zoomRange');
+
+  var zxingHints = null;
+  if (typeof ZXing !== 'undefined') {
+    zxingHints = new Map();
+    // TRY_HARDER: dokladniejsza analiza klatki, lepiej radzi sobie z przekrzywionymi/skosnymi kodami
+    zxingHints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  }
+  var codeReader = (typeof ZXing !== 'undefined') ? new ZXing.BrowserMultiFormatReader(zxingHints) : null;
   var lastDecodedText = null;
+  var currentTrack = null;
+  var currentCapabilities = null;
+  var torchOn = false;
+  var backCameraDevices = [];
+  var currentDeviceIndex = 0;
+  var supportsManualFocus = false;
+  var supportsSingleShotFocus = false;
+
+  function resetControlsUi() {
+    torchButton.hidden = true;
+    torchButton.classList.remove('active');
+    torchOn = false;
+    lensSwitchButton.hidden = true;
+    zoomControl.classList.remove('visible');
+    supportsManualFocus = false;
+    supportsSingleShotFocus = false;
+  }
+
+  function setupTrackControls() {
+    if (!scannerVideo.srcObject) {
+      return;
+    }
+    var tracks = scannerVideo.srcObject.getVideoTracks();
+    currentTrack = tracks[0] || null;
+    if (!currentTrack || typeof currentTrack.getCapabilities !== 'function') {
+      return;
+    }
+    currentCapabilities = currentTrack.getCapabilities();
+
+    // Latarka - dziala glownie na Androidzie/Chrome, iOS Safari nie udostepnia tego z poziomu strony WWW
+    if (currentCapabilities.torch) {
+      torchButton.hidden = false;
+    }
+
+    // Zoom - suwak pokazuje sie tylko gdy telefon/przegladarka zglasza taka mozliwosc
+    if (currentCapabilities.zoom) {
+      zoomRange.min = currentCapabilities.zoom.min;
+      zoomRange.max = currentCapabilities.zoom.max;
+      zoomRange.step = currentCapabilities.zoom.step || 0.1;
+      zoomRange.value = currentTrack.getSettings().zoom || currentCapabilities.zoom.min;
+      zoomControl.classList.add('visible');
+    }
+
+    // Reczne ogniskowanie po tapnieciu - wsparcie eksperymentalne, glownie Android/Chrome
+    if (Array.isArray(currentCapabilities.focusMode)) {
+      supportsManualFocus = currentCapabilities.focusMode.indexOf('manual') !== -1;
+      supportsSingleShotFocus = currentCapabilities.focusMode.indexOf('single-shot') !== -1;
+    }
+  }
+
+  function listBackCameras() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      return Promise.resolve([]);
+    }
+    return navigator.mediaDevices.enumerateDevices().then(function (devices) {
+      var videoInputs = devices.filter(function (d) { return d.kind === 'videoinput'; });
+      var backOnly = videoInputs.filter(function (d) {
+        return !/front|przod|user/i.test(d.label);
+      });
+      return backOnly.length > 0 ? backOnly : videoInputs;
+    });
+  }
+
+  function startScanning(deviceId) {
+    if (!codeReader) {
+      return;
+    }
+    lastDecodedText = null;
+    scannedCodeDisplay.textContent = 'Szukam kodu...';
+    confirmScanButton.classList.remove('ready');
+
+    var constraints = deviceId
+      ? { video: { deviceId: { exact: deviceId } } }
+      : { video: { facingMode: { ideal: 'environment' } } };
+
+    codeReader.decodeFromConstraints(constraints, 'scannerVideo', function (result, err) {
+      if (result) {
+        lastDecodedText = result.getText();
+        scannedCodeDisplay.textContent = lastDecodedText;
+        confirmScanButton.classList.add('ready');
+      }
+    }).catch(function (err) {
+      scannedCodeDisplay.textContent = 'Brak dostepu do aparatu.';
+      console.log('Blad uruchomienia kamery:', err);
+    });
+  }
 
   function openScanner() {
     if (!codeReader) {
       alert('Skaner kodow nie zaladowal sie (brak polaczenia z internetem przy pierwszym uruchomieniu).');
       return;
     }
-    lastDecodedText = null;
-    scannedCodeDisplay.textContent = 'Szukam kodu...';
-    confirmScanButton.classList.remove('ready');
+    resetControlsUi();
     scannerOverlay.classList.add('active');
+    startScanning(null);
 
-    codeReader.decodeFromConstraints(
-      { video: { facingMode: { ideal: 'environment' } } },
-      'scannerVideo',
-      function (result, err) {
-        if (result) {
-          lastDecodedText = result.getText();
-          scannedCodeDisplay.textContent = lastDecodedText;
-          confirmScanButton.classList.add('ready');
-        }
-      }
-    ).catch(function (err) {
-      scannedCodeDisplay.textContent = 'Brak dostepu do aparatu.';
-      console.log('Blad uruchomienia kamery:', err);
+    listBackCameras().then(function (cams) {
+      backCameraDevices = cams;
+      currentDeviceIndex = 0;
+      lensSwitchButton.hidden = cams.length < 2;
     });
   }
 
@@ -253,7 +416,13 @@
       codeReader.reset();
     }
     scannerOverlay.classList.remove('active');
+    currentTrack = null;
+    currentCapabilities = null;
   }
+
+  scannerVideo.addEventListener('loadedmetadata', function () {
+    setupTrackControls();
+  });
 
   scanButton.addEventListener('click', openScanner);
   scannerCloseButton.addEventListener('click', closeScanner);
@@ -264,6 +433,69 @@
     }
     document.getElementById('userInput').value = lastDecodedText;
     closeScanner();
+  });
+
+  torchButton.addEventListener('click', function () {
+    if (!currentTrack) {
+      return;
+    }
+    torchOn = !torchOn;
+    currentTrack.applyConstraints({ advanced: [{ torch: torchOn }] }).then(function () {
+      torchButton.classList.toggle('active', torchOn);
+    }).catch(function (err) {
+      torchOn = !torchOn;
+      console.log('Latarka niedostepna:', err);
+    });
+  });
+
+  lensSwitchButton.addEventListener('click', function () {
+    if (backCameraDevices.length < 2) {
+      return;
+    }
+    currentDeviceIndex = (currentDeviceIndex + 1) % backCameraDevices.length;
+    if (codeReader) {
+      codeReader.reset();
+    }
+    startScanning(backCameraDevices[currentDeviceIndex].deviceId);
+  });
+
+  zoomRange.addEventListener('input', function () {
+    if (!currentTrack) {
+      return;
+    }
+    var val = parseFloat(zoomRange.value);
+    currentTrack.applyConstraints({ advanced: [{ zoom: val }] }).catch(function (err) {
+      console.log('Zoom niedostepny:', err);
+    });
+  });
+
+  // Tap-to-focus: tapniecie na podglad probuje ustawic ognisko w tym miejscu
+  // (wsparcie eksperymentalne, glownie Android/Chrome; na iOS to zwykle no-op,
+  // bo Safari sam dobrze radzi sobie z autofokusem)
+  scannerVideo.addEventListener('click', function (e) {
+    var rect = scannerVideo.getBoundingClientRect();
+    var x = (e.clientX - rect.left) / rect.width;
+    var y = (e.clientY - rect.top) / rect.height;
+
+    var ripple = document.createElement('div');
+    ripple.className = 'focusRipple';
+    ripple.style.left = e.clientX + 'px';
+    ripple.style.top = e.clientY + 'px';
+    scannerOverlay.appendChild(ripple);
+    setTimeout(function () { ripple.remove(); }, 650);
+
+    if (!currentTrack) {
+      return;
+    }
+    if (supportsManualFocus) {
+      currentTrack.applyConstraints({
+        advanced: [{ focusMode: 'manual', pointsOfInterest: [{ x: x, y: y }] }]
+      }).catch(function (err) { console.log('Reczny fokus niedostepny:', err); });
+    } else if (supportsSingleShotFocus) {
+      currentTrack.applyConstraints({
+        advanced: [{ pointsOfInterest: [{ x: x, y: y }], focusMode: 'single-shot' }]
+      }).catch(function (err) { console.log('Fokus jednorazowy niedostepny:', err); });
+    }
   });
 </script>
 </body>
