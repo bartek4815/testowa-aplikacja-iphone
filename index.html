@@ -208,21 +208,31 @@
     width: 34px;
     height: 34px;
   }
-  .focusRipple {
+  #focusControl {
+    display: none;
     position: absolute;
-    width: 64px;
-    height: 64px;
-    margin-left: -32px;
-    margin-top: -32px;
-    border: 2px solid rgba(255, 255, 255, 0.85);
-    border-radius: 50%;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: max(140px, calc(env(safe-area-inset-bottom) + 124px));
+    width: 80%;
+    max-width: 320px;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 8px 14px;
+    border-radius: 20px;
     z-index: 2;
-    pointer-events: none;
-    animation: focusRippleAnim 0.6s ease-out forwards;
   }
-  @keyframes focusRippleAnim {
-    0% { transform: scale(1.3); opacity: 1; }
-    100% { transform: scale(0.85); opacity: 0; }
+  #focusControl.visible {
+    display: flex;
+  }
+  #focusControl span {
+    color: #ffffff;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  #focusRange {
+    flex: 1;
   }
 </style>
 </head>
@@ -245,6 +255,12 @@
   <div id="scannedCodeDisplay">Szukam kodu...</div>
 
   <div id="scannerDebugInfo">Wczytywanie mozliwosci kamery...</div>
+
+  <div id="focusControl">
+    <span>Daleko</span>
+    <input type="range" id="focusRange" min="0" max="15" step="0.1" value="0">
+    <span>Blisko</span>
+  </div>
 
   <button id="confirmScanButton" aria-label="Wpisz odczytany kod">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -284,6 +300,8 @@
   var scannerCloseButton = document.getElementById('scannerCloseButton');
   var torchButton = document.getElementById('torchButton');
   var scannerDebugInfo = document.getElementById('scannerDebugInfo');
+  var focusControl = document.getElementById('focusControl');
+  var focusRange = document.getElementById('focusRange');
 
   var codeReader = (typeof ZXing !== 'undefined') ? new ZXing.BrowserMultiFormatReader() : null;
   var lastDecodedText = null;
@@ -291,14 +309,13 @@
   var currentCapabilities = null;
   var torchOn = false;
   var supportsManualFocus = false;
-  var supportsSingleShotFocus = false;
 
   function resetControlsUi() {
     torchButton.hidden = true;
     torchButton.classList.remove('active');
     torchOn = false;
     supportsManualFocus = false;
-    supportsSingleShotFocus = false;
+    focusControl.classList.remove('visible');
     scannerDebugInfo.textContent = 'Wczytywanie mozliwosci kamery...';
   }
 
@@ -318,14 +335,27 @@
       torchButton.hidden = false;
     }
 
-    // Reczne ogniskowanie po tapnieciu - wsparcie eksperymentalne, glownie Android/Chrome
+    var settings = (typeof currentTrack.getSettings === 'function') ? currentTrack.getSettings() : {};
+
+    // Reczna ostrosc suwakiem - wsparcie eksperymentalne, glownie Android/Chrome.
+    // "pointsOfInterest" (tap-to-focus) jest bardzo niejednolicie wspierane na Androidzie,
+    // wiec zamiast tapniecia w punkt uzywamy wprost focusDistance z suwakiem.
     if (Array.isArray(currentCapabilities.focusMode)) {
       supportsManualFocus = currentCapabilities.focusMode.indexOf('manual') !== -1;
-      supportsSingleShotFocus = currentCapabilities.focusMode.indexOf('single-shot') !== -1;
+    }
+    if (supportsManualFocus && currentCapabilities.focusDistance) {
+      var fd = currentCapabilities.focusDistance;
+      // Niektore telefony zglaszaja zepsuty/nieuzywalny "max" (np. przepelnienie sterownika) -
+      // zamiast mu ufac, ograniczamy suwak do praktycznego zakresu.
+      var practicalMax = (typeof fd.max === 'number' && fd.max > 0 && fd.max < 100) ? fd.max : 15;
+      focusRange.min = fd.min || 0;
+      focusRange.max = practicalMax;
+      focusRange.step = fd.step || 0.1;
+      focusRange.value = (typeof settings.focusDistance === 'number') ? settings.focusDistance : focusRange.min;
+      focusControl.classList.add('visible');
     }
 
     // Diagnostyka - pokazuje dokladnie, co ten telefon/przegladarka zglasza jako mozliwosci kamery
-    var settings = (typeof currentTrack.getSettings === 'function') ? currentTrack.getSettings() : {};
     scannerDebugInfo.textContent = 'capabilities: ' + JSON.stringify(currentCapabilities) + '  |  settings: ' + JSON.stringify(settings);
   }
 
@@ -408,33 +438,18 @@
     });
   });
 
-  // Tap-to-focus: tapniecie na podglad probuje ustawic ognisko w tym miejscu
-  // (wsparcie eksperymentalne, glownie Android/Chrome; na iOS to zwykle no-op,
-  // bo Safari sam dobrze radzi sobie z autofokusem)
-  scannerVideo.addEventListener('click', function (e) {
-    var rect = scannerVideo.getBoundingClientRect();
-    var x = (e.clientX - rect.left) / rect.width;
-    var y = (e.clientY - rect.top) / rect.height;
-
-    var ripple = document.createElement('div');
-    ripple.className = 'focusRipple';
-    ripple.style.left = e.clientX + 'px';
-    ripple.style.top = e.clientY + 'px';
-    scannerOverlay.appendChild(ripple);
-    setTimeout(function () { ripple.remove(); }, 650);
-
+  // Reczna ostrosc suwakiem: ustawia focusMode na "manual" i wprost zadana odleglosc ogniskowania.
+  // To dziala nawet tam, gdzie "pointsOfInterest" (tapniecie w punkt) nie jest wspierane przez telefon.
+  focusRange.addEventListener('input', function () {
     if (!currentTrack) {
       return;
     }
-    if (supportsManualFocus) {
-      currentTrack.applyConstraints({
-        advanced: [{ focusMode: 'manual', pointsOfInterest: [{ x: x, y: y }] }]
-      }).catch(function (err) { console.log('Reczny fokus niedostepny:', err); });
-    } else if (supportsSingleShotFocus) {
-      currentTrack.applyConstraints({
-        advanced: [{ pointsOfInterest: [{ x: x, y: y }], focusMode: 'single-shot' }]
-      }).catch(function (err) { console.log('Fokus jednorazowy niedostepny:', err); });
-    }
+    var val = parseFloat(focusRange.value);
+    currentTrack.applyConstraints({
+      advanced: [{ focusMode: 'manual', focusDistance: val }]
+    }).catch(function (err) {
+      console.log('Reczna ostrosc niedostepna:', err);
+    });
   });
 </script>
 </body>

@@ -1,4 +1,4 @@
-var CACHE_NAME = 'testowa-aplikacja-v6';
+var CACHE_NAME = 'testowa-aplikacja-v7';
 var urlsToCache = [
   './',
   './index.html',
