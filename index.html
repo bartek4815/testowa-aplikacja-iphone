@@ -194,22 +194,30 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 78%;
-    height: 30%;
+    width: 80vmin;
+    height: 80vmin;
     border: 2px solid rgba(255, 255, 255, 0.8);
     border-radius: 14px;
     pointer-events: none;
     z-index: 1;
   }
+  /* celownik - krzyzyk na srodku kwadratu */
+  #scanFrame::before,
   #scanFrame::after {
     content: '';
     position: absolute;
     top: 50%;
-    left: 5%;
-    right: 5%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(239, 68, 68, 0.8);
+  }
+  #scanFrame::before {
+    width: 48px;
     height: 2px;
-    background: rgba(239, 68, 68, 0.75);
-    transform: translateY(-50%);
+  }
+  #scanFrame::after {
+    width: 2px;
+    height: 48px;
   }
   #confirmScanButton {
     position: absolute;
@@ -250,7 +258,7 @@
   <button id="scanButton">📷 Skanuj kod kreskowy</button>
 </div>
 
-<div id="appVersion">v10</div>
+<div id="appVersion">v11</div>
 
 <div id="scannerOverlay">
   <video id="scannerVideo" autoplay playsinline muted></video>
@@ -282,7 +290,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js"></script>
 <script>
-  var APP_VERSION = 'v10';
+  var APP_VERSION = 'v11';
   document.getElementById('appVersion').textContent = APP_VERSION;
 
   document.getElementById('clickButton').addEventListener('click', function () {
@@ -341,6 +349,7 @@
 
   var decodeCanvas = document.createElement('canvas');
   var decodeCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
+  var rotateThisFrame = false;
 
   function decodeCurrentFrame() {
     if (!barcodeReader || !ZX) {
@@ -351,18 +360,34 @@
     if (!vw || !vh) {
       return null;
     }
-    var regionW = Math.round(vw * 0.9);
-    var regionH = Math.round(vh * 0.9);
-    var scale = Math.min(1, 720 / Math.max(regionW, regionH));
-    var outW = Math.max(2, Math.round(regionW * scale));
-    var outH = Math.max(2, Math.round(regionH * scale));
-    if (decodeCanvas.width !== outW || decodeCanvas.height !== outH) {
-      decodeCanvas.width = outW;
-      decodeCanvas.height = outH;
+    // kwadratowy wycinek ze srodka kadru - odpowiada celownikowi na ekranie
+    var side = Math.round(Math.min(vw, vh) * 0.9);
+    var out = Math.max(2, Math.min(720, side));
+    if (decodeCanvas.width !== out || decodeCanvas.height !== out) {
+      decodeCanvas.width = out;
+      decodeCanvas.height = out;
     }
+
+    // Co druga klatka trafia do dekodera obrocona o 90 stopni. Czytnik kodow
+    // 1D skanuje obraz poziomymi liniami, wiec kod z paskami w pionie czyta
+    // z klatki zwyklej, a kod z paskami w poziomie - z obroconej. Dzieki temu
+    // skanowanie dziala w obu orientacjach bez obracania telefonu.
+    var rotate = rotateThisFrame;
+    rotateThisFrame = !rotateThisFrame;
+
+    decodeCtx.save();
+    var drawn = true;
     try {
-      decodeCtx.drawImage(scannerVideo, (vw - regionW) / 2, (vh - regionH) / 2, regionW, regionH, 0, 0, outW, outH);
+      if (rotate) {
+        decodeCtx.translate(out, 0);
+        decodeCtx.rotate(Math.PI / 2);
+      }
+      decodeCtx.drawImage(scannerVideo, (vw - side) / 2, (vh - side) / 2, side, side, 0, 0, out, out);
     } catch (e) {
+      drawn = false;
+    }
+    decodeCtx.restore();
+    if (!drawn) {
       return null;
     }
     try {
@@ -737,6 +762,54 @@
     scanTimer = setTimeout(scanTick, 110);
   }
 
+  // Blokada obrotu ekranu na czas skanowania. Chrome pozwala na nia wylacznie
+  // w trybie pelnoekranowym, dlatego najpierw prosimy o pelny ekran dla samej
+  // nakladki skanera. Wywolanie musi isc prosto z klikniecia uzytkownika.
+  // iOS Safari nie ma Screen Orientation API - tam proba nic nie zmienia,
+  // a skaner dziala tak jak dotad.
+  function lockScreenOrientation() {
+    var el = scannerOverlay;
+    var request = el.requestFullscreen || el.webkitRequestFullscreen;
+    var started = null;
+    try {
+      started = request ? request.call(el) : null;
+    } catch (e) {
+      started = null;
+    }
+    Promise.resolve(started).then(function () {
+      if (!window.screen || !screen.orientation || !screen.orientation.lock) {
+        return null;
+      }
+      // blokujemy w tej orientacji, w ktorej telefon jest w chwili otwarcia
+      return screen.orientation.lock(screen.orientation.type || 'portrait');
+    }).catch(function () {
+      // brak wsparcia albo odmowa - skaner dziala dalej, tylko bez blokady
+    });
+  }
+
+  function unlockScreenOrientation() {
+    try {
+      if (window.screen && screen.orientation && screen.orientation.unlock) {
+        screen.orientation.unlock();
+      }
+    } catch (e) {
+      // blokady moglo w ogole nie byc
+    }
+    var exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit && (document.fullscreenElement || document.webkitFullscreenElement)) {
+      try {
+        var p = exit.call(document);
+        if (p && p.catch) {
+          p.catch(function () {
+            // wyjscie z pelnego ekranu i tak nastapi przy zamknieciu nakladki
+          });
+        }
+      } catch (e) {
+        // jak wyzej
+      }
+    }
+  }
+
   function openScanner() {
     if (!barcodeReader) {
       alert('Skaner kodów nie załadował się (brak połączenia z internetem przy pierwszym uruchomieniu).');
@@ -750,6 +823,7 @@
     switchCameraButton.hidden = cameraList.length < 2;
     scannerOverlay.classList.add('active');
     scannerActive = true;
+    lockScreenOrientation();
 
     var startId = null;
     if (cameraList.length && cameraList[cameraIndex]) {
@@ -789,6 +863,7 @@
       scanTimer = null;
     }
     stopStream();
+    unlockScreenOrientation();
     scannerOverlay.classList.remove('active');
   }
 
