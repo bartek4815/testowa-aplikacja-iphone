@@ -90,6 +90,19 @@
     transform: scale(0.98);
   }
 
+  /* Numer wersji - od razu widac, czy telefon pobral najnowsza wersje */
+  #appVersion {
+    position: fixed;
+    right: max(10px, env(safe-area-inset-right));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    font-size: 12px;
+    font-weight: 600;
+    color: #94a3b8;
+    letter-spacing: 0.5px;
+    z-index: 10;
+    pointer-events: none;
+  }
+
   /* Pelnoekranowy podglad kamery ze skanerem kodow kreskowych */
   #scannerOverlay {
     display: none;
@@ -125,10 +138,6 @@
     justify-content: center;
     -webkit-tap-highlight-color: transparent;
   }
-  .scannerIconButton.active {
-    background: rgba(250, 204, 21, 0.85);
-    color: #1f2937;
-  }
   .scannerIconButton[hidden] {
     display: none;
   }
@@ -156,32 +165,51 @@
     color: #ffffff;
     padding: 10px 18px;
     border-radius: 12px;
-    font-size: 16px;
-    font-weight: 600;
+    font-size: 18px;
+    font-weight: 700;
     text-align: center;
     word-break: break-word;
     z-index: 2;
   }
-  #scannerDebugInfo {
-    position: absolute;
-    left: 10px;
-    right: 10px;
-    bottom: max(230px, calc(env(safe-area-inset-bottom) + 214px));
-    max-height: 120px;
-    overflow-y: auto;
-    background: rgba(0, 0, 0, 0.6);
-    color: #a7f3d0;
-    font-family: monospace;
-    font-size: 11px;
-    line-height: 1.4;
-    padding: 8px 10px;
-    border-radius: 10px;
-    z-index: 2;
-    word-break: break-word;
-    white-space: pre-wrap;
+  #scannedCodeDisplay.found {
+    background: rgba(22, 163, 74, 0.85);
   }
-  #scannerDebugInfo[hidden] {
-    display: none;
+  #cameraInfo {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: max(130px, calc(env(safe-area-inset-bottom) + 114px));
+    max-width: 88%;
+    background: rgba(0, 0, 0, 0.45);
+    color: #cbd5e1;
+    padding: 5px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    text-align: center;
+    word-break: break-word;
+    z-index: 2;
+  }
+  #scanFrame {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 78%;
+    height: 30%;
+    border: 2px solid rgba(255, 255, 255, 0.8);
+    border-radius: 14px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  #scanFrame::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 5%;
+    right: 5%;
+    height: 2px;
+    background: rgba(239, 68, 68, 0.75);
+    transform: translateY(-50%);
   }
   #confirmScanButton {
     position: absolute;
@@ -212,70 +240,6 @@
     width: 34px;
     height: 34px;
   }
-  #focusControl {
-    display: none;
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    bottom: max(140px, calc(env(safe-area-inset-bottom) + 124px));
-    width: 80%;
-    max-width: 320px;
-    align-items: center;
-    gap: 10px;
-    background: rgba(0, 0, 0, 0.4);
-    padding: 8px 14px;
-    border-radius: 20px;
-    z-index: 2;
-  }
-  #focusControl.visible {
-    display: flex;
-  }
-  #focusControl span {
-    color: #ffffff;
-    font-size: 13px;
-    white-space: nowrap;
-  }
-  #focusRange {
-    flex: 1;
-  }
-
-  /* Ramka celownika - obszar, ktory jest analizowany i na ktorym ustawiana jest ostrosc */
-  #scanFrame {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 78%;
-    height: 30%;
-    border: 2px solid rgba(255, 255, 255, 0.8);
-    border-radius: 14px;
-    pointer-events: none;
-    z-index: 1;
-  }
-  #scanFrame::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 5%;
-    right: 5%;
-    height: 2px;
-    background: rgba(239, 68, 68, 0.75);
-    transform: translateY(-50%);
-  }
-  #focusStatus {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    bottom: max(128px, calc(env(safe-area-inset-bottom) + 112px));
-    max-width: 88%;
-    background: rgba(0, 0, 0, 0.5);
-    color: #e2e8f0;
-    padding: 6px 14px;
-    border-radius: 14px;
-    font-size: 13px;
-    text-align: center;
-    z-index: 2;
-  }
 </style>
 </head>
 <body>
@@ -286,30 +250,21 @@
   <button id="scanButton">📷 Skanuj kod kreskowy</button>
 </div>
 
+<div id="appVersion">v9</div>
+
 <div id="scannerOverlay">
   <video id="scannerVideo" autoplay playsinline muted></video>
 
   <div id="scanFrame"></div>
 
   <div id="scannerTopLeftControls">
-    <button id="torchButton" class="scannerIconButton" aria-label="Włącz/wyłącz latarkę" hidden>🔦</button>
-    <button id="afButton" class="scannerIconButton" aria-label="Ustaw ostrość ponownie" hidden>🎯</button>
-    <button id="manualFocusButton" class="scannerIconButton" aria-label="Ręczna ostrość" hidden>✋</button>
-    <button id="debugToggleButton" class="scannerIconButton" aria-label="Diagnostyka">🛈</button>
+    <button id="switchCameraButton" class="scannerIconButton" aria-label="Zmień aparat" hidden>🔄</button>
   </div>
   <button id="scannerCloseButton" class="scannerIconButton" aria-label="Zamknij skaner">✕</button>
 
   <div id="scannedCodeDisplay">Szukam kodu...</div>
 
-  <div id="focusStatus">Uruchamiam aparat...</div>
-
-  <div id="scannerDebugInfo" hidden>Diagnostyka wyłączona.</div>
-
-  <div id="focusControl">
-    <span>Daleko</span>
-    <input type="range" id="focusRange" min="0" max="15" step="0.1" value="0">
-    <span>Blisko</span>
-  </div>
+  <div id="cameraInfo">Uruchamiam aparat...</div>
 
   <button id="confirmScanButton" aria-label="Wpisz odczytany kod">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -327,6 +282,9 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js"></script>
 <script>
+  var APP_VERSION = 'v9';
+  document.getElementById('appVersion').textContent = APP_VERSION;
+
   document.getElementById('clickButton').addEventListener('click', function () {
     var val = document.getElementById('userInput').value;
     document.getElementById('displayText').textContent = val.length > 0 ? val : '(puste pole)';
@@ -340,43 +298,29 @@
     });
   }
 
-  // =====================================================================
-  //  Skaner kodów kreskowych
-  //
-  //  Podglad z kamery obslugujemy sami (getUserMedia + wlasna petla),
-  //  a ZXinga uzywamy tylko do dekodowania pojedynczej klatki. Dzieki temu
-  //  mamy pelna kontrole nad sciezka wideo i mozemy:
-  //   - mierzyc ostrosc srodka kadru klatka po klatce,
-  //   - sterowac ostroscia kamery na podstawie tego pomiaru (autofokus
-  //     programowy dla Androidow, ktore nie daja dzialajacego autofokusu
-  //     sprzetowego przez WWW),
-  //   - dekodowac tylko wycinek obrazu (szybciej i bez tla dookola).
-  // =====================================================================
-
   var scannerOverlay = document.getElementById('scannerOverlay');
   var scannerVideo = document.getElementById('scannerVideo');
   var scannedCodeDisplay = document.getElementById('scannedCodeDisplay');
+  var cameraInfo = document.getElementById('cameraInfo');
   var confirmScanButton = document.getElementById('confirmScanButton');
   var scanButton = document.getElementById('scanButton');
   var scannerCloseButton = document.getElementById('scannerCloseButton');
-  var torchButton = document.getElementById('torchButton');
-  var afButton = document.getElementById('afButton');
-  var manualFocusButton = document.getElementById('manualFocusButton');
-  var debugToggleButton = document.getElementById('debugToggleButton');
-  var scannerDebugInfo = document.getElementById('scannerDebugInfo');
-  var focusStatus = document.getElementById('focusStatus');
-  var focusControl = document.getElementById('focusControl');
-  var focusRange = document.getElementById('focusRange');
+  var switchCameraButton = document.getElementById('switchCameraButton');
 
+  // =====================================================================
+  //  ROZPOZNAWANIE KODU Z KLATKI  (ta czesc dziala poprawnie - bez zmian)
+  //
+  //  Klatka z podgladu trafia na canvas, a ZXing dekoduje ja tak samo jak
+  //  zwykle zdjecie. Hint TRY_HARDER sprawia, ze przy kodach 1D ZXing probuje
+  //  takze obrazu obroconego o 90 stopni, wiec kod czytany jest w poziomie
+  //  i w pionie.
+  // =====================================================================
   var ZX = (typeof ZXing !== 'undefined') ? ZXing : null;
   var barcodeReader = null;
   var decodeHints = null;
 
   if (ZX) {
     decodeHints = new Map();
-    // TRY_HARDER kaze ZXingowi analizowac klatke dokladniej, a przy kodach 1D
-    // dodatkowo sprobowac jej obroconej o 90 stopni - dzieki temu kod czytany
-    // jest zarowno w poziomie, jak i w pionie
     decodeHints.set(ZX.DecodeHintType.TRY_HARDER, true);
     decodeHints.set(ZX.DecodeHintType.POSSIBLE_FORMATS, [
       ZX.BarcodeFormat.EAN_13,
@@ -397,222 +341,7 @@
 
   var decodeCanvas = document.createElement('canvas');
   var decodeCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
-  var focusCanvas = document.createElement('canvas');
-  var focusCtx = focusCanvas.getContext('2d', { willReadFrequently: true });
 
-  var mediaStream = null;
-  var currentTrack = null;
-  var currentCapabilities = {};
-  var lastDecodedText = null;
-  var lastGoodTs = 0;
-  var lastSharpness = 0;
-  var torchOn = false;
-  var scanTimer = null;
-  var scannerActive = false;
-  var manualPanelVisible = false;
-  var tickCount = 0;
-
-  var focusState = {
-    strategy: 'none',    // hw-poi | hw-continuous | hw-single | sw-sweep | none
-    applyVariant: -1,    // ktory sposob podania focusDistance dziala na tym telefonie
-    manualSupported: false,
-    distanceMin: 0,
-    distanceMax: 12,
-    distanceStep: 0.05,
-    best: null,
-    bestScore: 0,
-    busy: false,
-    lastActionTs: 0,
-    note: ''
-  };
-
-  function sleep(ms) {
-    return new Promise(function (resolve) {
-      setTimeout(resolve, ms);
-    });
-  }
-
-  function setFocusStatus(text) {
-    focusStatus.textContent = text;
-  }
-
-  function tryConstraints(c) {
-    if (!currentTrack) {
-      return Promise.resolve(false);
-    }
-    try {
-      return currentTrack.applyConstraints(c).then(function () {
-        return true;
-      }, function () {
-        return false;
-      });
-    } catch (e) {
-      return Promise.resolve(false);
-    }
-  }
-
-  function readSettings() {
-    if (!currentTrack || typeof currentTrack.getSettings !== 'function') {
-      return {};
-    }
-    try {
-      return currentTrack.getSettings() || {};
-    } catch (e) {
-      return {};
-    }
-  }
-
-  // -------------------------------------------------------------------
-  //  Ustawianie ostrosci na konkretna odleglosc
-  //
-  //  Chrome na Androidzie potrafi po cichu zignorowac ograniczenia ostrosci
-  //  podane w jeden sposob, a przyjac dokladnie te same podane inaczej -
-  //  i wlasnie dlatego poprzedni suwak nic nie zmienial w focusDistance.
-  //  Przy pierwszym uzyciu przechodzimy wiec po kolejnych wariantach zapisu
-  //  i zapamietujemy ten, po ktorym kamera faktycznie raportuje nowa wartosc.
-  // -------------------------------------------------------------------
-  function applyDistanceVariant(variant, value) {
-    if (variant === 0) {
-      return tryConstraints({ advanced: [{ focusMode: 'manual', focusDistance: value }] });
-    }
-    if (variant === 1) {
-      return tryConstraints({ focusMode: 'manual', focusDistance: value });
-    }
-    if (variant === 2) {
-      return tryConstraints({ advanced: [{ focusMode: 'manual' }] }).then(function () {
-        return tryConstraints({ advanced: [{ focusDistance: value }] });
-      });
-    }
-    return tryConstraints({ focusMode: 'manual' }).then(function () {
-      return tryConstraints({ focusDistance: value });
-    });
-  }
-
-  function setFocusDistance(value) {
-    if (!currentTrack || !focusState.manualSupported) {
-      return Promise.resolve(false);
-    }
-    if (focusState.applyVariant >= 0) {
-      return applyDistanceVariant(focusState.applyVariant, value);
-    }
-    var variants = [0, 1, 2, 3];
-    var idx = 0;
-
-    function next() {
-      if (idx >= variants.length) {
-        focusState.note = 'telefon ignoruje focusDistance';
-        return Promise.resolve(false);
-      }
-      var variant = variants[idx++];
-      return applyDistanceVariant(variant, value).then(function (ok) {
-        if (!ok) {
-          return next();
-        }
-        return sleep(160).then(function () {
-          var s = readSettings();
-          if (typeof s.focusDistance !== 'number') {
-            // telefon nie raportuje tej wartosci - nie ma jak sprawdzic,
-            // wiec przyjmujemy pierwszy wariant, ktory nie zostal odrzucony
-            focusState.applyVariant = variant;
-            focusState.note = 'brak odczytu focusDistance';
-            return true;
-          }
-          if (Math.abs(s.focusDistance - value) <= Math.max(0.01, focusState.distanceStep * 2)) {
-            focusState.applyVariant = variant;
-            focusState.note = '';
-            return true;
-          }
-          return next();
-        });
-      });
-    }
-
-    return next();
-  }
-
-  function applyFocusMode(mode, extra) {
-    var obj = { focusMode: mode };
-    if (extra) {
-      for (var k in extra) {
-        if (Object.prototype.hasOwnProperty.call(extra, k)) {
-          obj[k] = extra[k];
-        }
-      }
-    }
-    return tryConstraints({ advanced: [obj] }).then(function () {
-      return sleep(90);
-    }).then(function () {
-      if (readSettings().focusMode === mode) {
-        return true;
-      }
-      return tryConstraints(obj).then(function () {
-        return sleep(90);
-      }).then(function () {
-        return readSettings().focusMode === mode;
-      });
-    });
-  }
-
-  // -------------------------------------------------------------------
-  //  Pomiar ostrosci srodka kadru
-  //
-  //  Liczony na wycinku 1:1 z oryginalnej rozdzielczosci (bez skalowania -
-  //  skalowanie zamazuje wlasnie te informacje, ktora tu mierzymy).
-  //  Miara to srednia z kwadratow roznic jasnosci sasiednich pikseli,
-  //  znormalizowana wzgledem jasnosci sceny.
-  // -------------------------------------------------------------------
-  function measureSharpness() {
-    var vw = scannerVideo.videoWidth;
-    var vh = scannerVideo.videoHeight;
-    if (!vw || !vh) {
-      return 0;
-    }
-    var side = Math.min(240, vw, vh);
-    if (focusCanvas.width !== side) {
-      focusCanvas.width = side;
-      focusCanvas.height = side;
-    }
-    try {
-      focusCtx.drawImage(scannerVideo, (vw - side) / 2, (vh - side) / 2, side, side, 0, 0, side, side);
-    } catch (e) {
-      return 0;
-    }
-    var img;
-    try {
-      img = focusCtx.getImageData(0, 0, side, side);
-    } catch (e) {
-      return 0;
-    }
-    var d = img.data;
-    var sum = 0;
-    var mean = 0;
-    var count = 0;
-    for (var y = 1; y < side - 2; y += 2) {
-      var base = y * side * 4;
-      for (var x = 1; x < side - 2; x += 2) {
-        var i = base + x * 4;
-        var g = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
-        var iR = i + 8;
-        var gR = (d[iR] * 299 + d[iR + 1] * 587 + d[iR + 2] * 114) / 1000;
-        var iD = i + side * 8;
-        var gD = (d[iD] * 299 + d[iD + 1] * 587 + d[iD + 2] * 114) / 1000;
-        var dx = gR - g;
-        var dy = gD - g;
-        sum += dx * dx + dy * dy;
-        mean += g;
-        count++;
-      }
-    }
-    if (!count) {
-      return 0;
-    }
-    mean = mean / count;
-    return (sum / count) / (mean * mean / 100 + 1);
-  }
-
-  // -------------------------------------------------------------------
-  //  Dekodowanie jednej klatki (tylko obszar celownika)
-  // -------------------------------------------------------------------
   function decodeCurrentFrame() {
     if (!barcodeReader || !ZX) {
       return null;
@@ -647,277 +376,95 @@
       try {
         barcodeReader.reset();
       } catch (e2) {
-        // nic - reset jest tylko porzadkowy
+        // reset jest tylko porzadkowy
       }
     }
   }
 
-  function acceptCode(text) {
-    if (!text) {
-      return;
+  // =====================================================================
+  //  OBSLUGA APARATU - napisana od nowa
+  //
+  //  Zasada: zadnego recznego sterowania ostroscia. Otwieramy wlasciwy
+  //  obiektyw i prosimy kamere o jej wlasny autofokus ciagly z punktem
+  //  ostrosci na srodku kadru. Nic wiecej.
+  //
+  //  Dlaczego wybor obiektywu ma znaczenie: na wielu Androidach
+  //  "facingMode: environment" trafia w obiektyw ultraszerokokatny, makro
+  //  albo pomocniczy, a te bardzo czesto NIE MAJA w ogole ukladu autofokusu
+  //  (staly focus). Wtedy zaden kod JavaScript nie wyostrzy obrazu - trzeba
+  //  po prostu otworzyc glowny aparat. Na Androidzie rozpoznajemy go po
+  //  etykiecie "camera2 0, facing back".
+  // =====================================================================
+  var mediaStream = null;
+  var videoTrack = null;
+  var cameraList = [];
+  var cameraIndex = 0;
+  var scannerActive = false;
+  var scanTimer = null;
+  var lastDecodedText = null;
+  var singleShotNeeded = false;
+  var lastSingleShotTs = 0;
+
+  function labelOf(dev) {
+    return (dev && dev.label) ? dev.label : '';
+  }
+
+  function isBackCamera(label) {
+    var l = label.toLowerCase();
+    if (l.indexOf('front') !== -1 || l.indexOf('user') !== -1 || l.indexOf('przedni') !== -1) {
+      return false;
     }
-    lastDecodedText = text;
-    lastGoodTs = Date.now();
-    scannedCodeDisplay.textContent = text;
-    confirmScanButton.classList.add('ready');
-    if (navigator.vibrate) {
-      try {
-        navigator.vibrate(40);
-      } catch (e) {
-        // wibracja jest tylko dodatkiem
-      }
+    return l.indexOf('back') !== -1 || l.indexOf('rear') !== -1 ||
+           l.indexOf('environment') !== -1 || l.indexOf('tyl') !== -1;
+  }
+
+  function cameraScore(label) {
+    var l = label.toLowerCase();
+    var score = 0;
+    var m = l.match(/camera2\s+(\d+)/);
+    if (m) {
+      score += (m[1] === '0') ? 40 : -parseInt(m[1], 10) * 4;
+    }
+    if (l.indexOf('ultra') !== -1) {
+      score -= 40;
+    }
+    if (l.indexOf('tele') !== -1) {
+      score -= 20;
+    }
+    if (l.indexOf('macro') !== -1) {
+      score -= 30;
+    }
+    if (l.indexOf('depth') !== -1 || l.indexOf('mono') !== -1 || l.indexOf('bokeh') !== -1) {
+      score -= 60;
+    }
+    return score;
+  }
+
+  function currentDeviceId() {
+    if (!videoTrack || typeof videoTrack.getSettings !== 'function') {
+      return '';
+    }
+    try {
+      return videoTrack.getSettings().deviceId || '';
+    } catch (e) {
+      return '';
     }
   }
 
-  // -------------------------------------------------------------------
-  //  Autofokus programowy - przemiatanie zakresu i wybor najostrzejszego
-  //  ustawienia. Dokladnie to, co robi aparat, gdy sam szuka ostrosci,
-  //  tyle ze liczone w przegladarce na srodku kadru.
-  // -------------------------------------------------------------------
-  function buildFocusCandidates() {
-    var base = [0, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 4.5, 6, 8, 10, 12];
-    var out = [];
-    for (var i = 0; i < base.length; i++) {
-      var v = base[i];
-      if (v < focusState.distanceMin) {
-        v = focusState.distanceMin;
-      }
-      if (v > focusState.distanceMax) {
-        continue;
-      }
-      if (out.indexOf(v) === -1) {
-        out.push(v);
-      }
-    }
-    if (out.indexOf(focusState.distanceMax) === -1) {
-      out.push(focusState.distanceMax);
-    }
-    return out;
-  }
-
-  function autoFocusSweep(fine) {
-    if (focusState.busy || !currentTrack || !focusState.manualSupported) {
-      return Promise.resolve();
-    }
-    focusState.busy = true;
-
-    var list;
-    if (fine && focusState.best !== null) {
-      var span = Math.max(focusState.distanceStep * 6, focusState.distanceMax * 0.08);
-      list = [];
-      for (var k = -3; k <= 3; k++) {
-        var v = focusState.best + k * (span / 3);
-        if (v >= focusState.distanceMin && v <= focusState.distanceMax) {
-          list.push(Math.round(v * 1000) / 1000);
+  function stopStream() {
+    if (mediaStream) {
+      var tracks = mediaStream.getTracks();
+      for (var i = 0; i < tracks.length; i++) {
+        try {
+          tracks[i].stop();
+        } catch (e) {
+          // strumien i tak zaraz przestaje istniec
         }
       }
-    } else {
-      list = buildFocusCandidates();
+      mediaStream = null;
     }
-
-    var bestValue = null;
-    var bestScore = -1;
-    var idx = 0;
-
-    function step() {
-      if (!scannerActive || idx >= list.length) {
-        return Promise.resolve();
-      }
-      var value = list[idx++];
-      setFocusStatus('Ustawiam ostrość... ' + idx + '/' + list.length);
-      return setFocusDistance(value).then(function () {
-        return sleep(230);
-      }).then(function () {
-        var score = measureSharpness();
-        lastSharpness = score;
-        if (score > bestScore) {
-          bestScore = score;
-          bestValue = value;
-        }
-        // przy okazji: ostra klatka moze od razu dac odczyt kodu
-        var text = decodeCurrentFrame();
-        if (text) {
-          acceptCode(text);
-        }
-        return step();
-      });
-    }
-
-    return step().then(function () {
-      focusState.busy = false;
-      focusState.lastActionTs = Date.now();
-      if (bestValue === null) {
-        return null;
-      }
-      focusState.best = bestValue;
-      focusState.bestScore = bestScore;
-      focusRange.value = bestValue;
-      return setFocusDistance(bestValue).then(function () {
-        setFocusStatus('Ostrość ustawiona automatycznie (' + bestValue + ')');
-      });
-    }, function () {
-      focusState.busy = false;
-      focusState.lastActionTs = Date.now();
-    });
-  }
-
-  function nudgeHardwareFocus() {
-    if (!currentTrack) {
-      return;
-    }
-    focusState.lastActionTs = Date.now();
-    if (focusState.strategy === 'hw-poi') {
-      applyFocusMode('continuous', { pointsOfInterest: [{ x: 0.5, y: 0.5 }] });
-    } else if (focusState.strategy === 'hw-single') {
-      applyFocusMode('single-shot');
-    } else if (focusState.strategy === 'hw-continuous') {
-      applyFocusMode('continuous');
-    }
-  }
-
-  function refocusNow() {
-    if (focusState.strategy === 'sw-sweep') {
-      autoFocusSweep(false);
-    } else if (focusState.strategy !== 'none') {
-      setFocusStatus('Wymuszam ostrość na środku kadru...');
-      nudgeHardwareFocus();
-    }
-  }
-
-  function maybeRefocus() {
-    var now = Date.now();
-    if (lastDecodedText && now - lastGoodTs < 1500) {
-      return;
-    }
-    if (focusState.strategy === 'sw-sweep') {
-      if (focusState.busy) {
-        return;
-      }
-      lastSharpness = measureSharpness();
-      var quiet = now - focusState.lastActionTs;
-      if (focusState.best === null) {
-        if (quiet > 700) {
-          autoFocusSweep(false);
-        }
-        return;
-      }
-      if (quiet > 2500) {
-        // obraz wyraznie stracil ostrosc albo od dawna nic nie widac -
-        // wtedy pelne przemiatanie, w innym razie tylko dostrojenie
-        if (lastSharpness < focusState.bestScore * 0.6 || quiet > 7000) {
-          autoFocusSweep(false);
-        } else {
-          autoFocusSweep(true);
-        }
-      }
-    } else if (focusState.strategy !== 'none') {
-      if (now - focusState.lastActionTs > 2000) {
-        nudgeHardwareFocus();
-      }
-    }
-  }
-
-  function updateDebug() {
-    if (scannerDebugInfo.hidden) {
-      return;
-    }
-    var s = readSettings();
-    var lines = [];
-    lines.push('strategia: ' + focusState.strategy +
-      (focusState.applyVariant >= 0 ? '  wariant=' + focusState.applyVariant : '  wariant=?') +
-      (focusState.note ? '  [' + focusState.note + ']' : ''));
-    lines.push('ostrość: best=' + (focusState.best === null ? '-' : focusState.best) +
-      '  score=' + Math.round(lastSharpness) +
-      '  bestScore=' + Math.round(focusState.bestScore));
-    lines.push('settings: ' + JSON.stringify(s));
-    lines.push('capabilities: ' + JSON.stringify(currentCapabilities));
-    scannerDebugInfo.textContent = lines.join('\n');
-  }
-
-  function scanTick() {
-    if (!scannerActive) {
-      return;
-    }
-    if (!focusState.busy && scannerVideo.readyState >= 2) {
-      var text = decodeCurrentFrame();
-      if (text) {
-        acceptCode(text);
-      } else {
-        maybeRefocus();
-      }
-      tickCount++;
-      if (tickCount % 4 === 0) {
-        updateDebug();
-      }
-    }
-    scanTimer = setTimeout(scanTick, 120);
-  }
-
-  function setupTrackControls() {
-    currentCapabilities = {};
-    if (!currentTrack) {
-      return;
-    }
-    if (typeof currentTrack.getCapabilities === 'function') {
-      try {
-        currentCapabilities = currentTrack.getCapabilities() || {};
-      } catch (e) {
-        currentCapabilities = {};
-      }
-    }
-    var settings = readSettings();
-
-    torchButton.hidden = !currentCapabilities.torch;
-
-    var modes = Array.isArray(currentCapabilities.focusMode) ? currentCapabilities.focusMode : [];
-    var hasPoi = !!currentCapabilities.pointsOfInterest;
-
-    focusState.applyVariant = -1;
-    focusState.best = null;
-    focusState.bestScore = 0;
-    focusState.note = '';
-    focusState.lastActionTs = 0;
-    focusState.manualSupported = (modes.indexOf('manual') !== -1) && !!currentCapabilities.focusDistance;
-
-    if (currentCapabilities.focusDistance) {
-      var fd = currentCapabilities.focusDistance;
-      focusState.distanceMin = (typeof fd.min === 'number' && isFinite(fd.min)) ? fd.min : 0;
-      // czesc telefonow z Androidem zglasza absurdalny "max" (blad sterownika
-      // kamery) - wtedy trzymamy sie zakresu praktycznego zamiast mu wierzyc
-      focusState.distanceMax = (typeof fd.max === 'number' && isFinite(fd.max) && fd.max > 0 && fd.max <= 60) ? fd.max : 12;
-      focusState.distanceStep = (typeof fd.step === 'number' && fd.step > 0 && fd.step <= 1) ? fd.step : 0.05;
-      focusRange.min = focusState.distanceMin;
-      focusRange.max = focusState.distanceMax;
-      focusRange.step = focusState.distanceStep;
-      focusRange.value = (typeof settings.focusDistance === 'number') ? settings.focusDistance : focusState.distanceMin;
-    }
-
-    if (hasPoi && modes.indexOf('continuous') !== -1) {
-      focusState.strategy = 'hw-poi';
-    } else if (modes.indexOf('continuous') !== -1) {
-      focusState.strategy = 'hw-continuous';
-    } else if (modes.indexOf('single-shot') !== -1) {
-      focusState.strategy = 'hw-single';
-    } else if (focusState.manualSupported) {
-      focusState.strategy = 'sw-sweep';
-    } else {
-      focusState.strategy = 'none';
-    }
-
-    manualFocusButton.hidden = !focusState.manualSupported;
-    afButton.hidden = (focusState.strategy === 'none');
-    focusControl.classList.toggle('visible', focusState.manualSupported && manualPanelVisible);
-
-    if (focusState.strategy === 'none') {
-      setFocusStatus('Ostrość: automatyka aparatu');
-    } else if (focusState.strategy === 'sw-sweep') {
-      setFocusStatus('Autofokus programowy - szukam ostrości...');
-      autoFocusSweep(false);
-    } else {
-      setFocusStatus('Ostrość: auto, środek kadru');
-      nudgeHardwareFocus();
-    }
-    updateDebug();
+    videoTrack = null;
+    scannerVideo.srcObject = null;
   }
 
   function waitForVideo() {
@@ -938,60 +485,196 @@
     });
   }
 
-  function startCamera() {
-    // Wyzsza rozdzielczosc wymusza na Androidzie pelny profil kamery zamiast
-    // profilu "podgladowego", w ktorym sterownik czesto w ogole nie rusza
-    // ukladem ostrosci
-    var constraints = {
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 30 }
+  // Autofokus: prosimy kamere o jej wlasny tryb ciagly (a gdy go nie ma - o
+  // pojedyncze wyzwolenie) i o punkt ostrosci na srodku kadru. Trybu "manual"
+  // nie ustawiamy nigdy - to on wczesniej blokowal telefon na jednej odleglosci.
+  function enableAutoFocus() {
+    singleShotNeeded = false;
+    lastSingleShotTs = 0;
+    if (!videoTrack || typeof videoTrack.applyConstraints !== 'function') {
+      return;
+    }
+    var caps = {};
+    if (typeof videoTrack.getCapabilities === 'function') {
+      try {
+        caps = videoTrack.getCapabilities() || {};
+      } catch (e) {
+        caps = {};
       }
-    };
-    navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
-      mediaStream = stream;
-      currentTrack = stream.getVideoTracks()[0] || null;
-      scannerVideo.srcObject = stream;
-      var p = scannerVideo.play();
-      return p && p.catch ? p.catch(function () { return null; }) : null;
-    }).then(function () {
-      return waitForVideo();
-    }).then(function () {
-      if (!scannerActive) {
-        return;
-      }
-      setupTrackControls();
-      scanTick();
-    }).catch(function (err) {
-      scannedCodeDisplay.textContent = 'Brak dostępu do aparatu.';
-      setFocusStatus('Błąd kamery: ' + (err && err.name ? err.name : String(err)));
+    }
+    var modes = Array.isArray(caps.focusMode) ? caps.focusMode : [];
+    var target = null;
+    if (modes.indexOf('continuous') !== -1) {
+      target = 'continuous';
+    } else if (modes.indexOf('single-shot') !== -1) {
+      target = 'single-shot';
+      singleShotNeeded = true;
+    }
+    if (!target) {
+      // kamera nie udostepnia sterowania ostroscia przez WWW - zostaje jej
+      // wlasna automatyka, ktora jest wtedy i tak jedynym, co dziala
+      return;
+    }
+    var wish = { focusMode: target };
+    if (caps.pointsOfInterest) {
+      wish.pointsOfInterest = [{ x: 0.5, y: 0.5 }];
+    }
+    videoTrack.applyConstraints({ advanced: [wish] }).catch(function () {
+      // prosba best-effort - brak reakcji nie jest bledem
     });
   }
 
-  function resetControlsUi() {
-    torchButton.hidden = true;
-    torchButton.classList.remove('active');
-    torchOn = false;
-    afButton.hidden = true;
-    manualFocusButton.hidden = true;
-    focusControl.classList.remove('visible');
-    manualPanelVisible = false;
-    lastDecodedText = null;
-    lastGoodTs = 0;
-    lastSharpness = 0;
-    tickCount = 0;
-    focusState.strategy = 'none';
-    focusState.manualSupported = false;
-    focusState.busy = false;
-    focusState.best = null;
-    focusState.bestScore = 0;
-    focusState.applyVariant = -1;
-    focusState.note = '';
-    scannedCodeDisplay.textContent = 'Szukam kodu...';
-    confirmScanButton.classList.remove('ready');
-    setFocusStatus('Uruchamiam aparat...');
+  function updateCameraInfo() {
+    var settings = {};
+    if (videoTrack && typeof videoTrack.getSettings === 'function') {
+      try {
+        settings = videoTrack.getSettings() || {};
+      } catch (e) {
+        settings = {};
+      }
+    }
+    var parts = [APP_VERSION];
+    if (cameraList.length > 1) {
+      parts.push('aparat ' + (cameraIndex + 1) + '/' + cameraList.length);
+    }
+    var label = labelOf(cameraList[cameraIndex]);
+    if (label) {
+      parts.push(label.length > 32 ? label.substring(0, 32) + '...' : label);
+    }
+    if (settings.width && settings.height) {
+      parts.push(settings.width + 'x' + settings.height);
+    }
+    cameraInfo.textContent = parts.join(' | ');
+  }
+
+  function openCamera(deviceId) {
+    stopStream();
+    var videoWish = {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 30 }
+    };
+    if (deviceId) {
+      videoWish.deviceId = { exact: deviceId };
+    } else {
+      videoWish.facingMode = { ideal: 'environment' };
+    }
+    return navigator.mediaDevices.getUserMedia({ video: videoWish }).then(function (stream) {
+      mediaStream = stream;
+      videoTrack = stream.getVideoTracks()[0] || null;
+      scannerVideo.srcObject = stream;
+      var p = scannerVideo.play();
+      if (p && p.catch) {
+        p.catch(function () {
+          // odtwarzanie i tak startuje z atrybutu autoplay
+        });
+      }
+      return waitForVideo();
+    }).then(function () {
+      enableAutoFocus();
+      updateCameraInfo();
+      return true;
+    });
+  }
+
+  // Lista aparatow tylnych - budowana raz, po uzyskaniu zgody (dopiero wtedy
+  // przegladarka podaje etykiety). Gdy etykiety sa androidowe i wybrany
+  // obiektyw nie jest glownym, przelaczamy sie na glowny automatycznie.
+  // Na iOS nie kombinujemy - tam facingMode trafia dobrze.
+  function buildCameraList() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      return Promise.resolve(null);
+    }
+    return navigator.mediaDevices.enumerateDevices().then(function (list) {
+      var vids = [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].kind === 'videoinput') {
+          vids.push(list[i]);
+        }
+      }
+      var back = [];
+      for (var j = 0; j < vids.length; j++) {
+        if (isBackCamera(labelOf(vids[j]))) {
+          back.push(vids[j]);
+        }
+      }
+      cameraList = back.length ? back : vids;
+      switchCameraButton.hidden = cameraList.length < 2;
+
+      var curId = currentDeviceId();
+      cameraIndex = 0;
+      for (var k = 0; k < cameraList.length; k++) {
+        if (cameraList[k].deviceId && cameraList[k].deviceId === curId) {
+          cameraIndex = k;
+        }
+      }
+
+      var androidLabels = false;
+      for (var n = 0; n < cameraList.length; n++) {
+        if (/camera2\s+\d+/i.test(labelOf(cameraList[n]))) {
+          androidLabels = true;
+        }
+      }
+      if (!androidLabels || cameraList.length < 2) {
+        updateCameraInfo();
+        return null;
+      }
+
+      var bestIdx = 0;
+      for (var m = 1; m < cameraList.length; m++) {
+        if (cameraScore(labelOf(cameraList[m])) > cameraScore(labelOf(cameraList[bestIdx]))) {
+          bestIdx = m;
+        }
+      }
+      if (bestIdx === cameraIndex || !cameraList[bestIdx].deviceId) {
+        updateCameraInfo();
+        return null;
+      }
+      cameraIndex = bestIdx;
+      return openCamera(cameraList[bestIdx].deviceId);
+    }, function () {
+      return null;
+    });
+  }
+
+  function showCode(text) {
+    lastDecodedText = text;
+    scannedCodeDisplay.textContent = text;
+    scannedCodeDisplay.classList.add('found');
+    confirmScanButton.classList.add('ready');
+    if (navigator.vibrate) {
+      try {
+        navigator.vibrate(40);
+      } catch (e) {
+        // wibracja jest tylko dodatkiem
+      }
+    }
+  }
+
+  function retriggerSingleShot() {
+    var now = Date.now();
+    if (now - lastSingleShotTs < 1500 || !videoTrack) {
+      return;
+    }
+    lastSingleShotTs = now;
+    videoTrack.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] }).catch(function () {
+      // best-effort
+    });
+  }
+
+  function scanTick() {
+    if (!scannerActive) {
+      return;
+    }
+    if (scannerVideo.readyState >= 2) {
+      var text = decodeCurrentFrame();
+      if (text) {
+        showCode(text);
+      } else if (singleShotNeeded) {
+        retriggerSingleShot();
+      }
+    }
+    scanTimer = setTimeout(scanTick, 110);
   }
 
   function openScanner() {
@@ -999,10 +682,30 @@
       alert('Skaner kodów nie załadował się (brak połączenia z internetem przy pierwszym uruchomieniu).');
       return;
     }
-    resetControlsUi();
+    lastDecodedText = null;
+    scannedCodeDisplay.textContent = 'Szukam kodu...';
+    scannedCodeDisplay.classList.remove('found');
+    confirmScanButton.classList.remove('ready');
+    cameraInfo.textContent = 'Uruchamiam aparat...';
+    switchCameraButton.hidden = cameraList.length < 2;
     scannerOverlay.classList.add('active');
     scannerActive = true;
-    startCamera();
+
+    var startId = (cameraList.length && cameraList[cameraIndex]) ? cameraList[cameraIndex].deviceId : null;
+    openCamera(startId).then(function () {
+      if (!cameraList.length) {
+        return buildCameraList();
+      }
+      return null;
+    }).then(function () {
+      if (scannerActive) {
+        updateCameraInfo();
+        scanTick();
+      }
+    }).catch(function (err) {
+      scannedCodeDisplay.textContent = 'Brak dostępu do aparatu.';
+      cameraInfo.textContent = 'Błąd: ' + ((err && err.name) ? err.name : String(err));
+    });
   }
 
   function closeScanner() {
@@ -1011,25 +714,28 @@
       clearTimeout(scanTimer);
       scanTimer = null;
     }
-    if (mediaStream) {
-      mediaStream.getTracks().forEach(function (t) {
-        try {
-          t.stop();
-        } catch (e) {
-          // strumien i tak zaraz znika
-        }
-      });
-      mediaStream = null;
-    }
-    scannerVideo.srcObject = null;
-    currentTrack = null;
-    currentCapabilities = {};
-    focusState.busy = false;
+    stopStream();
     scannerOverlay.classList.remove('active');
+  }
+
+  function switchCamera() {
+    if (cameraList.length < 2 || !scannerActive) {
+      return;
+    }
+    cameraIndex = (cameraIndex + 1) % cameraList.length;
+    scannedCodeDisplay.textContent = 'Szukam kodu...';
+    scannedCodeDisplay.classList.remove('found');
+    confirmScanButton.classList.remove('ready');
+    lastDecodedText = null;
+    cameraInfo.textContent = 'Przełączam aparat...';
+    openCamera(cameraList[cameraIndex].deviceId).catch(function () {
+      cameraInfo.textContent = 'Nie udało się otworzyć tego aparatu';
+    });
   }
 
   scanButton.addEventListener('click', openScanner);
   scannerCloseButton.addEventListener('click', closeScanner);
+  switchCameraButton.addEventListener('click', switchCamera);
 
   confirmScanButton.addEventListener('click', function () {
     if (!lastDecodedText) {
@@ -1037,50 +743,6 @@
     }
     document.getElementById('userInput').value = lastDecodedText;
     closeScanner();
-  });
-
-  afButton.addEventListener('click', refocusNow);
-
-  manualFocusButton.addEventListener('click', function () {
-    manualPanelVisible = !manualPanelVisible;
-    manualFocusButton.classList.toggle('active', manualPanelVisible);
-    focusControl.classList.toggle('visible', focusState.manualSupported && manualPanelVisible);
-  });
-
-  debugToggleButton.addEventListener('click', function () {
-    scannerDebugInfo.hidden = !scannerDebugInfo.hidden;
-    debugToggleButton.classList.toggle('active', !scannerDebugInfo.hidden);
-    updateDebug();
-  });
-
-  torchButton.addEventListener('click', function () {
-    if (!currentTrack) {
-      return;
-    }
-    torchOn = !torchOn;
-    currentTrack.applyConstraints({ advanced: [{ torch: torchOn }] }).then(function () {
-      torchButton.classList.toggle('active', torchOn);
-    }).catch(function (err) {
-      torchOn = !torchOn;
-      console.log('Latarka niedostępna:', err);
-    });
-  });
-
-  // Reczne dostrojenie ostrosci - uzywa tego samego, sprawdzonego wariantu
-  // zapisu co autofokus programowy. Ruch suwakiem wylacza automat, zeby
-  // przemiatanie nie nadpisywalo ustawienia uzytkownika od razu po ruchu.
-  focusRange.addEventListener('input', function () {
-    if (!currentTrack || !focusState.manualSupported) {
-      return;
-    }
-    var val = parseFloat(focusRange.value);
-    focusState.best = val;
-    focusState.busy = false;
-    focusState.lastActionTs = Date.now();
-    setFocusDistance(val).then(function (ok) {
-      setFocusStatus(ok ? ('Ostrość ręczna: ' + val) : 'Telefon nie przyjmuje ręcznej ostrości');
-      focusState.bestScore = measureSharpness();
-    });
   });
 </script>
 </body>
