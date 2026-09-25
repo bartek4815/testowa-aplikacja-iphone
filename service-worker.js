@@ -1,10 +1,34 @@
-var CACHE_NAME = 'testowa-aplikacja-v11';
+/*
+ * ============================================================================
+ *  Service worker - cache offline aplikacji
+ * ============================================================================
+ *
+ *  Zadanie: aplikacja ma się uruchamiać bez internetu po pierwszym wejściu.
+ *
+ *  WAŻNE PRZY KAŻDEJ ZMIANIE KODU: podbij CACHE_NAME razem z APP_VERSION
+ *  w index.html. Nazwa cache jest jedynym sygnałem dla przeglądarki, że
+ *  pliki się zmieniły - bez jej zmiany telefon w nieskończoność serwuje
+ *  starą wersję z pamięci i wygląda to jak "zmiany nie weszły".
+ *
+ *  Strategia: cache-first (najpierw pamięć, potem sieć). Świadomie prosta -
+ *  to aplikacja testowa. Biblioteka ZXing ładowana jest z CDN i nie ma jej
+ *  na liście, więc pierwsze uruchomienie wymaga internetu; potem przeglądarka
+ *  trzyma ją we własnym cache HTTP.
+ */
+
+var CACHE_NAME = 'testowa-aplikacja-v12';
+
+// Pliki wgrywane do cache przy instalacji. './' to sam adres katalogu -
+// pod nim otwiera się aplikacja dodana do ekranu głównego.
 var urlsToCache = [
   './',
   './index.html',
   './manifest.json'
 ];
 
+// INSTALACJA - wgranie kompletu plików do nowego cache.
+// skipWaiting() sprawia, że nowa wersja przejmuje kontrolę od razu, zamiast
+// czekać na zamknięcie wszystkich kart ze starą wersją.
 self.addEventListener('install', function (event) {
   event.waitUntil(
     caches.open(CACHE_NAME).then(function (cache) {
@@ -14,6 +38,9 @@ self.addEventListener('install', function (event) {
   self.skipWaiting();
 });
 
+// AKTYWACJA - sprzątanie po poprzednich wersjach.
+// Kasujemy każdy cache o innej nazwie niż bieżąca, żeby stare pliki nie
+// zostawały w telefonie na zawsze.
 self.addEventListener('activate', function (event) {
   event.waitUntil(
     caches.keys().then(function (names) {
@@ -29,6 +56,7 @@ self.addEventListener('activate', function (event) {
   self.clients.claim();
 });
 
+// PRZECHWYTYWANIE ŻĄDAŃ - najpierw cache, a gdy pliku tam nie ma, sieć.
 self.addEventListener('fetch', function (event) {
   event.respondWith(
     caches.match(event.request).then(function (response) {
