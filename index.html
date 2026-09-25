@@ -250,7 +250,7 @@
   <button id="scanButton">📷 Skanuj kod kreskowy</button>
 </div>
 
-<div id="appVersion">v9</div>
+<div id="appVersion">v10</div>
 
 <div id="scannerOverlay">
   <video id="scannerVideo" autoplay playsinline muted></video>
@@ -282,7 +282,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js"></script>
 <script>
-  var APP_VERSION = 'v9';
+  var APP_VERSION = 'v10';
   document.getElementById('appVersion').textContent = APP_VERSION;
 
   document.getElementById('clickButton').addEventListener('click', function () {
@@ -418,10 +418,43 @@
            l.indexOf('environment') !== -1 || l.indexOf('tyl') !== -1;
   }
 
+  // Chrome podaje etykiety tylnych aparatow jako "camera 0, facing back"
+  // (stare API) albo "camera2 0, facing back" (camera2) - numer 0 to na
+  // Androidzie glowny obiektyw z autofokusem
+  var ANDROID_LABEL_RE = /camera2?\s+(\d+)/i;
+  var STORAGE_KEY = 'scannerCameraChoice';
+
+  function loadSavedCamera() {
+    try {
+      var raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      var obj = JSON.parse(raw);
+      return (obj && (obj.deviceId || obj.label)) ? obj : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveCamera(dev) {
+    if (!dev) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        deviceId: dev.deviceId || '',
+        label: labelOf(dev)
+      }));
+    } catch (e) {
+      // brak localStorage (tryb prywatny) - wybor po prostu nie bedzie pamietany
+    }
+  }
+
   function cameraScore(label) {
     var l = label.toLowerCase();
     var score = 0;
-    var m = l.match(/camera2\s+(\d+)/);
+    var m = l.match(ANDROID_LABEL_RE);
     if (m) {
       score += (m[1] === '0') ? 40 : -parseInt(m[1], 10) * 4;
     }
@@ -609,42 +642,69 @@
         }
       }
 
-      var androidLabels = false;
-      for (var n = 0; n < cameraList.length; n++) {
-        if (/camera2\s+\d+/i.test(labelOf(cameraList[n]))) {
-          androidLabels = true;
+      // 1) wybor zapamietany przyciskiem zmiany aparatu ma pierwszenstwo
+      var wantedIdx = -1;
+      var saved = loadSavedCamera();
+      if (saved) {
+        for (var s = 0; s < cameraList.length; s++) {
+          if (saved.deviceId && cameraList[s].deviceId === saved.deviceId) {
+            wantedIdx = s;
+            break;
+          }
         }
-      }
-      if (!androidLabels || cameraList.length < 2) {
-        updateCameraInfo();
-        return null;
+        if (wantedIdx === -1 && saved.label) {
+          // deviceId potrafi sie zmienic po wyczyszczeniu danych strony,
+          // wiec awaryjnie dopasowujemy po etykiecie obiektywu
+          for (var t = 0; t < cameraList.length; t++) {
+            if (labelOf(cameraList[t]) === saved.label) {
+              wantedIdx = t;
+              break;
+            }
+          }
+        }
       }
 
-      var bestIdx = 0;
-      for (var m = 1; m < cameraList.length; m++) {
-        if (cameraScore(labelOf(cameraList[m])) > cameraScore(labelOf(cameraList[bestIdx]))) {
-          bestIdx = m;
+      // 2) nic nie zapamietane - typujemy glowny obiektyw po etykiecie
+      if (wantedIdx === -1 && cameraList.length > 1) {
+        var androidLabels = false;
+        for (var n = 0; n < cameraList.length; n++) {
+          if (ANDROID_LABEL_RE.test(labelOf(cameraList[n]))) {
+            androidLabels = true;
+          }
+        }
+        if (androidLabels) {
+          var bestIdx = 0;
+          for (var m = 1; m < cameraList.length; m++) {
+            if (cameraScore(labelOf(cameraList[m])) > cameraScore(labelOf(cameraList[bestIdx]))) {
+              bestIdx = m;
+            }
+          }
+          wantedIdx = bestIdx;
         }
       }
-      if (bestIdx === cameraIndex || !cameraList[bestIdx].deviceId) {
+
+      if (wantedIdx === -1 || wantedIdx === cameraIndex || !cameraList[wantedIdx].deviceId) {
         updateCameraInfo();
         return null;
       }
-      cameraIndex = bestIdx;
-      return openCamera(cameraList[bestIdx].deviceId);
+      cameraIndex = wantedIdx;
+      return openCamera(cameraList[wantedIdx].deviceId);
     }, function () {
       return null;
     });
   }
 
   function showCode(text) {
+    // petla skanowania czyta ten sam kod kilka razy na sekunde - wibracja
+    // odpala sie wiec tylko wtedy, gdy odczytany kod faktycznie sie zmienil
+    var isNewCode = (text !== lastDecodedText);
     lastDecodedText = text;
     scannedCodeDisplay.textContent = text;
     scannedCodeDisplay.classList.add('found');
     confirmScanButton.classList.add('ready');
-    if (navigator.vibrate) {
+    if (isNewCode && navigator.vibrate) {
       try {
-        navigator.vibrate(40);
+        navigator.vibrate(80);
       } catch (e) {
         // wibracja jest tylko dodatkiem
       }
@@ -691,8 +751,22 @@
     scannerOverlay.classList.add('active');
     scannerActive = true;
 
-    var startId = (cameraList.length && cameraList[cameraIndex]) ? cameraList[cameraIndex].deviceId : null;
-    openCamera(startId).then(function () {
+    var startId = null;
+    if (cameraList.length && cameraList[cameraIndex]) {
+      startId = cameraList[cameraIndex].deviceId;
+    } else {
+      var savedStart = loadSavedCamera();
+      if (savedStart && savedStart.deviceId) {
+        startId = savedStart.deviceId;
+      }
+    }
+    openCamera(startId).catch(function (err) {
+      if (!startId) {
+        throw err;
+      }
+      // zapamietany obiektyw moze byc juz nieaktualny - wracamy do domyslnego
+      return openCamera(null);
+    }).then(function () {
       if (!cameraList.length) {
         return buildCameraList();
       }
@@ -728,7 +802,11 @@
     confirmScanButton.classList.remove('ready');
     lastDecodedText = null;
     cameraInfo.textContent = 'Przełączam aparat...';
-    openCamera(cameraList[cameraIndex].deviceId).catch(function () {
+    openCamera(cameraList[cameraIndex].deviceId).then(function () {
+      // wybor uzytkownika zostaje zapamietany - przy nastepnym otwarciu
+      // skanera aplikacja wystartuje od razu na tym obiektywie
+      saveCamera(cameraList[cameraIndex]);
+    }).catch(function () {
       cameraInfo.textContent = 'Nie udało się otworzyć tego aparatu';
     });
   }
