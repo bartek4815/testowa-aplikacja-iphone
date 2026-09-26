@@ -16,7 +16,7 @@
  *  trzyma ją we własnym cache HTTP.
  */
 
-var CACHE_NAME = 'skaner-kodow-kreskowych-v13';
+var CACHE_NAME = 'skaner-kodow-kreskowych-v14';
 
 // Pliki wgrywane do cache przy instalacji. './' to sam adres katalogu -
 // pod nim otwiera się aplikacja dodana do ekranu głównego.
@@ -27,7 +27,10 @@ var urlsToCache = [
   './index.html',
   './demo.html',
   './skaner_kodow_kreskowych.html',
-  './manifest.json'
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
+  './apple-touch-icon.png'
 ];
 
 // INSTALACJA - wgranie kompletu plików do nowego cache.
