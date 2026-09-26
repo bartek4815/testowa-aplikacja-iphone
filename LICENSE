@@ -1,0 +1,43 @@
+MIT License
+
+Copyright (c) 2026 Bartex (https://github.com/bartek4815)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+STRESZCZENIE PO POLSKU (nie zastępuje treści licencji powyżej)
+
+Możesz tego używać do czego chcesz - prywatnie i komercyjnie, możesz zmieniać
+kod i rozpowszechniać go dalej, także jako część zamkniętego produktu.
+
+Jeden warunek: w każdej kopii albo istotnej części tego kodu musisz zostawić
+powyższą informację o prawach autorskich i treść licencji. Czyli po prostu
+podaj źródło.
+
+Oprogramowanie jest udostępniane "tak jak jest", bez żadnej gwarancji. Autor
+nie odpowiada za szkody wynikłe z jego użycia.
+
+--------------------------------------------------------------------------------
+
+SKŁADNIKI ZEWNĘTRZNE
+
+ZXing for JS (https://github.com/zxing-js/library) - biblioteka dekodująca
+kody kreskowe, pobierana z CDN, licencja MIT, copyright (c) 2016 ZXing for JS.
+Jej licencja obowiązuje osobno i niezależnie od powyższej.

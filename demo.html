@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+   Skaner kodów kreskowych - demo biblioteki
+  ============================================================================
+
+   Ten plik to PRZYKŁAD APLIKACJI, która korzysta ze skanera. Sam skaner
+   siedzi w całości w pliku skaner_kodow_kreskowych.html i nic o tej
+   aplikacji nie wie.
+
+   Pliki projektu:
+     demo.html                     - to, co widzisz (przykładowa aplikacja)
+     skaner_kodow_kreskowych.html  - biblioteka skanera, jeden plik
+     index.html                    - przekierowanie na demo.html
+     manifest.json                 - metadane PWA
+     service-worker.js             - cache offline
+     README.md                     - skrócona instrukcja biblioteki
+     LICENSE                       - licencja MIT
+
+   ŻEBY UŻYĆ SKANERA W SWOJEJ APLIKACJI, POTRZEBUJESZ DWÓCH RZECZY:
+
+     1. skopiować plik skaner_kodow_kreskowych.html obok swojej strony,
+     2. wczytać go raz funkcją loadScannerLibrary() (jest niżej w tym pliku -
+        skopiuj ją do siebie, ma kilkanaście linii i nie wymaga niczego więcej).
+
+   Potem wystarczy:
+
+     BarcodeScanner.open({
+       onScan: function (kod) {
+         // tu robisz co chcesz z odczytanym kodem
+       }
+     });
+
+   Pełny opis opcji jest w nagłówku pliku skaner_kodow_kreskowych.html
+   oraz w README.md.
+  ============================================================================
+-->
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Skaner kodów kreskowych</title>
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Skaner">
+<meta name="theme-color" content="#2563eb">
+<style>
+  /* ==========================================================================
+     Style samej aplikacji demo. Skaner ma własne style w swoim pliku -
+     tutaj nie ma po nim ani śladu.
+     ========================================================================== */
+  * {
+    box-sizing: border-box;
+  }
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(180deg, #f4f6fb 0%, #e9edf7 100%);
+  }
+  .container {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 24px;
+    /* env(safe-area-inset-*) omija notcha i pasek gestów na iPhonie */
+    padding-top: max(32px, env(safe-area-inset-top));
+    gap: 20px;
+  }
+  .display-text {
+    font-size: 28px;
+    font-weight: 600;
+    color: #1f2937;
+    text-align: center;
+    min-height: 40px;
+    word-break: break-word;
+    max-width: 90%;
+  }
+  #userInput {
+    width: 100%;
+    max-width: 320px;
+    padding: 14px 16px;
+    font-size: 17px;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    background: #ffffff;
+    outline: none;
+  }
+  #userInput:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  }
+  #clickButton {
+    width: 100%;
+    max-width: 320px;
+    padding: 16px;
+    font-size: 18px;
+    font-weight: 600;
+    color: #ffffff;
+    background: #2563eb;
+    border: none;
+    border-radius: 12px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #clickButton:active {
+    background: #1d4ed8;
+    transform: scale(0.98);
+  }
+  #scanButton {
+    width: 100%;
+    max-width: 320px;
+    padding: 16px;
+    font-size: 18px;
+    font-weight: 600;
+    color: #ffffff;
+    background: #16a34a;
+    border: none;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #scanButton:active {
+    background: #15803d;
+    transform: scale(0.98);
+  }
+  #scanButton:disabled {
+    background: #94a3b8;
+  }
+  /* Numer wersji w rogu ekranu - od razu widać, czy telefon pobrał już nową
+     wersję, czy service worker nadal podaje starą z cache */
+  #appVersion {
+    position: fixed;
+    right: max(10px, env(safe-area-inset-right));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    font-size: 12px;
+    font-weight: 600;
+    color: #94a3b8;
+    letter-spacing: 0.5px;
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div id="displayText" class="display-text">Witaj!</div>
+  <input type="text" id="userInput" placeholder="Wpisz tutaj tekst..." autocomplete="off" autocapitalize="off">
+  <button id="clickButton">Kliknij mnie</button>
+  <button id="scanButton">📷 Skanuj kod kreskowy</button>
+</div>
+
+<!-- Numer wersji; tekst wstawia skrypt z APP_VERSION, tu jest tylko wartość
+     zapasowa na wypadek błędu skryptu -->
+<div id="appVersion">v13</div>
+
+<script>
+  // ===========================================================================
+  //  WERSJA APLIKACJI
+  // ===========================================================================
+
+  // Jedyne miejsce z numerem wersji w tym pliku.
+  // UWAGA: przy zmianie podbij też CACHE_NAME w service-worker.js, bo inaczej
+  // telefon dalej dostanie starą wersję z cache.
+  var APP_VERSION = 'v13';
+  document.getElementById('appVersion').textContent = APP_VERSION;
+
+  // Rejestracja service workera - odpowiada za działanie offline
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('service-worker.js').catch(function (err) {
+        console.log('Rejestracja service workera nie powiodła się:', err);
+      });
+    });
+  }
+
+  // ===========================================================================
+  //  WCZYTANIE BIBLIOTEKI SKANERA
+  //
+  //  Plik skaner_kodow_kreskowych.html nie jest pełnym dokumentem, tylko
+  //  fragmentem: style + nakładka + skrypt. Doklejamy go do strony i
+  //  uruchamiamy jego skrypt, po czym w window pojawia się BarcodeScanner.
+  //
+  //  Tę funkcję skopiuj do swojej aplikacji - to całe "podłączenie biblioteki".
+  // ===========================================================================
+
+  /**
+   * Wczytuje plik biblioteki i dokleja go do strony.
+   *
+   * @param {string} url ścieżka do skaner_kodow_kreskowych.html
+   * @returns {Promise<void>} spełniona, gdy window.BarcodeScanner jest gotowy
+   */
+  function loadScannerLibrary(url) {
+    return fetch(url).then(function (response) {
+      if (!response.ok) {
+        throw new Error('Nie udało się pobrać ' + url + ' (HTTP ' + response.status + ')');
+      }
+      return response.text();
+    }).then(function (html) {
+      var holder = document.createElement('div');
+      holder.innerHTML = html;
+
+      // Skrypty wstawione przez innerHTML NIE uruchamiają się same - trzeba je
+      // wyjąć i odtworzyć jako nowe elementy <script>. To jedyny nieoczywisty
+      // fragment tego mechanizmu.
+      var found = holder.querySelectorAll('script');
+      var sources = [];
+      for (var i = 0; i < found.length; i++) {
+        sources.push(found[i].textContent);
+        found[i].parentNode.removeChild(found[i]);
+      }
+
+      // najpierw style i nakładka...
+      document.body.appendChild(holder);
+      // ...potem skrypt, który się uruchamia dopiero po wstawieniu do strony
+      for (var j = 0; j < sources.length; j++) {
+        var fresh = document.createElement('script');
+        fresh.textContent = sources[j];
+        document.body.appendChild(fresh);
+      }
+    });
+  }
+
+  // ===========================================================================
+  //  APLIKACJA DEMO
+  // ===========================================================================
+
+  var displayText = document.getElementById('displayText');
+  var userInput = document.getElementById('userInput');
+  var scanButton = document.getElementById('scanButton');
+
+  // Demo z pierwszej wersji aplikacji: przepisuje tekst z pola do nagłówka
+  document.getElementById('clickButton').addEventListener('click', function () {
+    var val = userInput.value;
+    displayText.textContent = val.length > 0 ? val : '(puste pole)';
+  });
+
+  // Biblioteka wczytywana raz, przy starcie strony. Do czasu jej wczytania
+  // przycisk skanowania jest wyłączony, żeby nie dało się kliknąć w pustkę.
+  scanButton.disabled = true;
+  loadScannerLibrary('skaner_kodow_kreskowych.html').then(function () {
+    scanButton.disabled = false;
+  }).catch(function (err) {
+    scanButton.textContent = 'Skaner niedostępny';
+    console.log('Biblioteka skanera nie wczytała się:', err);
+  });
+
+  /*
+   * Otwarcie skanera. Wywołanie MUSI iść prosto z kliknięcia użytkownika -
+   * tylko wtedy przeglądarka pozwala włączyć pełny ekran, a bez pełnego ekranu
+   * nie zadziała blokada obrotu.
+   *
+   * Tutaj korzystamy z dwóch funkcji zwrotnych:
+   *   onScan  - kod zatwierdzony przyciskiem na dole ekranu skanera,
+   *   onError - np. brak zgody na aparat albo brak internetu przy pierwszym
+   *             uruchomieniu (ZXing pobierany jest z CDN).
+   *
+   * Gdybyś chciał, żeby skaner zamykał się sam przy pierwszym odczycie,
+   * bez zatwierdzania, dopisz do opcji: autoClose: true
+   */
+  scanButton.addEventListener('click', function () {
+    if (!window.BarcodeScanner) {
+      return;
+    }
+    BarcodeScanner.open({
+      onScan: function (code) {
+        userInput.value = code;
+        displayText.textContent = code;
+      },
+      onError: function (err) {
+        displayText.textContent = 'Skaner: ' + ((err && err.message) ? err.message : err);
+      }
+    });
+  });
+</script>
+</body>
+</html>

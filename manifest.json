@@ -1,1 +1,1 @@
-{"name":"Testowa Aplikacja","short_name":"TestApp","start_url":"./index.html","scope":"./","display":"standalone","background_color":"#f4f6fb","theme_color":"#2563eb","icons":[]}
+{"name":"Skaner kodów kreskowych","short_name":"Skaner","start_url":"./demo.html","scope":"./","display":"standalone","background_color":"#f4f6fb","theme_color":"#2563eb","icons":[]}

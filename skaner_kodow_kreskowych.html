@@ -1,0 +1,1215 @@
+<!--
+  ============================================================================
+   SKANER KODÓW KRESKOWYCH - biblioteka do wielokrotnego użytku
+   Wersja 1.0
+  ============================================================================
+
+   Jeden plik = cały skaner: style, wygląd nakładki i logika. Wystarczy go
+   skopiować obok swojej aplikacji i wczytać (patrz README.md). Plik nie jest
+   pełnym dokumentem HTML, tylko fragmentem doklejanym do strony hosta.
+
+   CO UDOSTĘPNIA
+
+     BarcodeScanner.open(opcje)   - otwiera skaner, zwraca Promise
+     BarcodeScanner.close()       - zamyka skaner
+     BarcodeScanner.isOpen()      - czy skaner jest otwarty
+     BarcodeScanner.defaults      - domyślne opcje (można nadpisać globalnie)
+     BarcodeScanner.version       - wersja biblioteki
+
+   NAJPROSTSZE UŻYCIE
+
+     BarcodeScanner.open({
+       onScan: function (kod) {
+         document.getElementById('poleTekstowe').value = kod;
+       }
+     });
+
+   OPCJE (wszystkie nieobowiązkowe)
+
+     onScan(kod)        - kod zatwierdzony przyciskiem na dole ekranu
+     onDetect(kod)      - każdy nowy odczyt, jeszcze przed zatwierdzeniem
+     onClose()          - skaner został zamknięty
+     onError(blad)      - brak zgody na aparat, brak internetu przy pierwszym
+                          uruchomieniu itp.
+     autoClose          - true: pierwszy odczyt od razu zamyka skaner
+                          i wywołuje onScan (domyślnie false - użytkownik
+                          zatwierdza sam)
+     lockOrientation    - true (domyślnie): blokuje obrót ekranu na czas
+                          skanowania; działa na Androidzie, iOS to ignoruje
+     vibrate            - true (domyślnie): krótka wibracja przy nowym kodzie
+     formats            - lista nazw formatów ZXing, np. ['EAN_13','QR_CODE'];
+                          domyślnie typowe kody kreskowe i QR
+     zxingUrl           - własny adres biblioteki ZXing (np. kopia lokalna)
+
+   WYMAGANIA
+
+     - HTTPS albo localhost (przeglądarki nie dają aparatu po zwykłym HTTP)
+     - internet przy pierwszym uruchomieniu (ZXing pobierany z CDN)
+     - wywołanie open() prosto z kliknięcia użytkownika, bo tylko wtedy
+       przeglądarka pozwala włączyć pełny ekran i zablokować obrót
+
+   ZASADY, KTÓRYCH TRZYMA SIĘ TEN PLIK
+
+     - wszystkie identyfikatory i klasy mają przedrostek "bcs", żeby nie
+       kolidowały z niczym w aplikacji hosta
+     - cały kod siedzi w jednej funkcji anonimowej; na zewnątrz wystawiony
+       jest wyłącznie obiekt window.BarcodeScanner
+     - biblioteka nie rusza wyglądu strony hosta - nakładka jest position:
+       fixed i pojawia się dopiero na czas skanowania
+
+   JAK TO DZIAŁA W ŚRODKU (trzy warstwy)
+
+     1. APARAT   - własne getUserMedia, wybór właściwego obiektywu i prośba
+                   o autofokus kamery. Bez tego reszta nie ma znaczenia,
+                   bo z nieostrego obrazu nie da się odczytać kodu.
+     2. PĘTLA    - co 110 ms klatka podglądu trafia na canvas, co druga
+                   obrócona o 90 stopni.
+     3. DEKODER  - ZXing czyta klatkę z canvasa tak jak zwykłe zdjęcie.
+
+   Rzecz, która najczęściej zaskakuje: na Androidzie "facingMode: environment"
+   bardzo często otwiera obiektyw ultraszerokokątny albo pomocniczy, a te
+   w wielu telefonach NIE MAJĄ w ogóle układu autofokusu. Żaden kod nie
+   wyostrzy takiego obrazu - trzeba po prostu otworzyć główny aparat. Temu
+   służy cała sekcja z listą i punktacją obiektywów.
+
+   Licencja: MIT - patrz plik LICENSE.
+  ============================================================================
+-->
+<style>
+  /* ==========================================================================
+     Nakładka skanera. Warstwy (z-index):
+       0  podgląd z kamery      1  celownik
+       2  napisy                3  przyciski
+     ========================================================================== */
+  #bcsOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: #000000;
+    z-index: 99999;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #bcsOverlay.bcsActive {
+    display: block;
+  }
+  /* object-fit: cover wypełnia ekran bez zniekształceń - kadr jest przycinany,
+     a nie rozciągany, więc proporcje kodu na obrazie pozostają prawidłowe */
+  #bcsVideo {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: #000000;
+  }
+  .bcsIconButton {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.45);
+    color: #ffffff;
+    font-size: 18px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .bcsIconButton[hidden] {
+    display: none;
+  }
+  /* env(safe-area-inset-*) omija notcha i pasek gestów na iPhonie */
+  #bcsTopLeft {
+    position: absolute;
+    top: max(16px, env(safe-area-inset-top));
+    left: 16px;
+    display: flex;
+    gap: 10px;
+    z-index: 3;
+  }
+  #bcsCloseButton {
+    position: absolute;
+    top: max(16px, env(safe-area-inset-top));
+    right: 16px;
+    z-index: 3;
+  }
+  /* Odczytany kod; klasa bcsFound zmienia tło na zielone w chwili trafienia */
+  #bcsCodeDisplay {
+    position: absolute;
+    top: max(64px, calc(env(safe-area-inset-top) + 48px));
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 88%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #ffffff;
+    padding: 10px 18px;
+    border-radius: 12px;
+    font-size: 18px;
+    font-weight: 700;
+    text-align: center;
+    word-break: break-word;
+    z-index: 2;
+  }
+  #bcsCodeDisplay.bcsFound {
+    background: rgba(22, 163, 74, 0.85);
+  }
+  /* Numer aktywnego obiektywu - widoczny tylko, gdy jest z czego wybierać */
+  #bcsCameraInfo {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: max(130px, calc(env(safe-area-inset-bottom) + 114px));
+    max-width: 88%;
+    background: rgba(0, 0, 0, 0.45);
+    color: #cbd5e1;
+    padding: 5px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    text-align: center;
+    word-break: break-word;
+    z-index: 2;
+  }
+  /* Celownik: kwadrat, bo dekoder dostaje kwadratowy wycinek ze środka kadru.
+     80vmin = 80% krótszego boku ekranu, więc kwadrat zostaje kwadratem
+     niezależnie od orientacji telefonu. */
+  #bcsFrame {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 80vmin;
+    height: 80vmin;
+    border: 2px solid rgba(255, 255, 255, 0.8);
+    border-radius: 14px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  /* Krzyżyk na środku celownika - dwie prostopadłe kreski */
+  #bcsFrame::before,
+  #bcsFrame::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(239, 68, 68, 0.8);
+  }
+  #bcsFrame::before {
+    width: 48px;
+    height: 2px;
+  }
+  #bcsFrame::after {
+    width: 2px;
+    height: 48px;
+  }
+  /* Przycisk zatwierdzenia: przygaszony i nieklikalny, dopóki nie ma odczytu.
+     Klasę bcsReady nadaje showCode(), zdejmuje resetReadout(). */
+  #bcsConfirmButton {
+    position: absolute;
+    bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px));
+    left: 50%;
+    transform: translateX(-50%);
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.22);
+    border: 2px solid rgba(255, 255, 255, 0.65);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.4;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+    z-index: 3;
+  }
+  #bcsConfirmButton.bcsReady {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #bcsConfirmButton svg {
+    width: 34px;
+    height: 34px;
+  }
+</style>
+
+<!-- Nakładka skanera. Ukryta, pokazywana klasą bcsActive przez open(). -->
+<div id="bcsOverlay">
+  <!-- playsinline: bez tego iOS otwiera wideo w natywnym odtwarzaczu
+       na pełnym ekranie; muted: warunek autoodtwarzania w przeglądarkach -->
+  <video id="bcsVideo" autoplay playsinline muted></video>
+
+  <!-- Celownik - pokazuje obszar, który trafia do dekodera -->
+  <div id="bcsFrame"></div>
+
+  <!-- Zmiana obiektywu; widoczny dopiero, gdy telefon ma więcej niż jeden
+       aparat tylny (ustawia to buildCameraList) -->
+  <div id="bcsTopLeft">
+    <button id="bcsSwitchButton" class="bcsIconButton" type="button" aria-label="Zmień aparat" hidden>🔄</button>
+  </div>
+  <button id="bcsCloseButton" class="bcsIconButton" type="button" aria-label="Zamknij skaner">✕</button>
+
+  <!-- Odczytany kod -->
+  <div id="bcsCodeDisplay">Szukam kodu...</div>
+
+  <!-- Numer aktywnego obiektywu -->
+  <div id="bcsCameraInfo"></div>
+
+  <!-- Zatwierdzenie odczytu: wywołuje onScan i zamyka skaner -->
+  <button id="bcsConfirmButton" type="button" aria-label="Zatwierdź odczytany kod">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="4" width="1.6" height="16" fill="#ffffff"/>
+      <rect x="5" y="4" width="0.8" height="16" fill="#ffffff"/>
+      <rect x="7" y="4" width="1.6" height="16" fill="#ffffff"/>
+      <rect x="10" y="4" width="0.8" height="16" fill="#ffffff"/>
+      <rect x="12" y="4" width="2.2" height="16" fill="#ffffff"/>
+      <rect x="15.5" y="4" width="0.8" height="16" fill="#ffffff"/>
+      <rect x="17.5" y="4" width="1.6" height="16" fill="#ffffff"/>
+      <rect x="20.5" y="4" width="1.2" height="16" fill="#ffffff"/>
+    </svg>
+  </button>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ===========================================================================
+  //  USTAWIENIA I STAN
+  // ===========================================================================
+
+  var VERSION = '1.0';
+
+  // Adres biblioteki ZXing. Pobierana dopiero przy pierwszym otwarciu skanera,
+  // więc sama obecność tego pliku niczego nie ściąga z sieci.
+  var ZXING_URL = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js';
+
+  // Klucz w localStorage, pod którym pamiętamy obiektyw wybrany ręcznie
+  var STORAGE_KEY = 'bcsCameraChoice';
+
+  // Chrome podaje etykiety aparatów jako "camera 0, facing back" (stare API)
+  // albo "camera2 0, facing back" (camera2). Numer 0 to na Androidzie główny
+  // obiektyw - ten z autofokusem. Wzorzec musi łapać obie postacie.
+  var ANDROID_LABEL_RE = /camera2?\s+(\d+)/i;
+
+  // Formaty czytane domyślnie. Zawężenie listy = mniej pracy na klatkę
+  // = płynniejsze skanowanie.
+  var DEFAULT_FORMATS = [
+    'EAN_13', 'EAN_8', 'UPC_A', 'UPC_E',
+    'CODE_128', 'CODE_39', 'CODE_93', 'ITF', 'CODABAR',
+    'QR_CODE', 'DATA_MATRIX'
+  ];
+
+  // Domyślne opcje. Aplikacja hosta może je nadpisać globalnie
+  // (BarcodeScanner.defaults.vibrate = false) albo pojedynczo przy open().
+  var defaults = {
+    onScan: null,
+    onDetect: null,
+    onClose: null,
+    onError: null,
+    autoClose: false,
+    lockOrientation: true,
+    vibrate: true,
+    formats: null,
+    zxingUrl: null
+  };
+
+  var opts = {};                 // opcje bieżącego otwarcia skanera
+
+  var ZX = null;                 // obiekt biblioteki ZXing po załadowaniu
+  var zxingPromise = null;       // pobieranie ZXing - startuje tylko raz
+  var barcodeReader = null;      // czytnik ZXing
+  var decodeHints = null;        // podpowiedzi dekodera (formaty, TRY_HARDER)
+
+  var mediaStream = null;        // aktywny strumień z kamery (MediaStream)
+  var videoTrack = null;         // ścieżka wideo tego strumienia
+  var cameraList = [];           // lista obiektywów tylnych (MediaDeviceInfo[])
+  var cameraIndex = 0;           // który z listy jest w tej chwili otwarty
+  var scannerActive = false;     // czy nakładka skanera jest otwarta
+  var scanTimer = null;          // uchwyt setTimeout pętli skanowania
+  var lastDecodedText = null;    // ostatni odczytany kod (także do wibracji)
+  var singleShotNeeded = false;  // kamera bez trybu ciągłego - trzeba wyzwalać
+  var lastSingleShotTs = 0;      // kiedy ostatnio wyzwolono pojedynczy autofokus
+  var rotateThisFrame = false;   // przełącznik obrotu klatki (patrz dekoder)
+
+  // Uchwyty do elementów nakładki - pobierane raz, żeby nie szukać ich w pętli
+  var overlay = document.getElementById('bcsOverlay');
+  var video = document.getElementById('bcsVideo');
+  var codeDisplay = document.getElementById('bcsCodeDisplay');
+  var cameraInfo = document.getElementById('bcsCameraInfo');
+  var confirmButton = document.getElementById('bcsConfirmButton');
+  var closeButton = document.getElementById('bcsCloseButton');
+  var switchButton = document.getElementById('bcsSwitchButton');
+
+  // Canvas roboczy dekodera - jeden na całe życie strony, nie trafia do DOM.
+  // willReadFrequently mówi przeglądarce, że będziemy często czytać piksele,
+  // dzięki czemu trzyma bufor w pamięci zamiast na GPU (szybszy odczyt).
+  var decodeCanvas = document.createElement('canvas');
+  var decodeCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
+
+  /**
+   * Bezpieczne wywołanie funkcji zwrotnej podanej przez aplikację hosta.
+   * Wyjątek w cudzym kodzie nie może wywrócić skanera, więc tylko go logujemy.
+   *
+   * @param {Function|null} fn
+   * @param {*} arg
+   */
+  function callBack(fn, arg) {
+    if (typeof fn !== 'function') {
+      return;
+    }
+    try {
+      fn(arg);
+    } catch (e) {
+      console.log('[BarcodeScanner] błąd w funkcji zwrotnej:', e);
+    }
+  }
+
+  // ===========================================================================
+  //  WARSTWA 1: DEKODER - odczyt kodu z pojedynczej klatki
+  //
+  //  ZXing nie wie nic o kamerze. Dostaje canvas i traktuje go jak zwykłe
+  //  zdjęcie. Cała obsługa wideo jest niżej w tym pliku.
+  // ===========================================================================
+
+  /**
+   * Pobiera bibliotekę ZXing z sieci. Wywoływana przy pierwszym otwarciu
+   * skanera; kolejne wywołania dostają ten sam Promise, więc plik leci raz.
+   *
+   * @returns {Promise<Object>} obiekt ZXing
+   */
+  function loadZXing() {
+    if (zxingPromise) {
+      return zxingPromise;
+    }
+    zxingPromise = new Promise(function (resolve, reject) {
+      if (typeof window.ZXing !== 'undefined') {
+        resolve(window.ZXing);      // ktoś już dołączył ZXing do strony
+        return;
+      }
+      var s = document.createElement('script');
+      s.src = opts.zxingUrl || ZXING_URL;
+      s.onload = function () {
+        if (typeof window.ZXing !== 'undefined') {
+          resolve(window.ZXing);
+        } else {
+          reject(new Error('Biblioteka ZXing wczytała się, ale nie wystawiła obiektu ZXing'));
+        }
+      };
+      s.onerror = function () {
+        reject(new Error('Nie udało się pobrać biblioteki ZXing (brak internetu?)'));
+      };
+      document.head.appendChild(s);
+    });
+    return zxingPromise;
+  }
+
+  /**
+   * Tworzy czytnik ZXing z podpowiedziami wynikającymi z bieżących opcji.
+   * Wywoływane przy każdym open(), bo lista formatów może się różnić.
+   */
+  function buildReader() {
+    var names = (opts.formats && opts.formats.length) ? opts.formats : DEFAULT_FORMATS;
+    var formats = [];
+    for (var i = 0; i < names.length; i++) {
+      var f = ZX.BarcodeFormat[names[i]];
+      if (typeof f !== 'undefined') {
+        formats.push(f);
+      }
+    }
+    decodeHints = new Map();
+    // TRY_HARDER: dokładniejsza (wolniejsza) analiza klatki. Przy kodach 1D
+    // ZXing próbuje wtedy dodatkowo obrazu obróconego, co pomaga przy kodach
+    // sfotografowanych pod kątem.
+    decodeHints.set(ZX.DecodeHintType.TRY_HARDER, true);
+    decodeHints.set(ZX.DecodeHintType.POSSIBLE_FORMATS, formats);
+    barcodeReader = new ZX.MultiFormatReader();
+    barcodeReader.setHints(decodeHints);
+  }
+
+  /**
+   * Pobiera bieżącą klatkę z podglądu i próbuje odczytać z niej kod.
+   * Wywoływana z pętli skanowania co 110 ms.
+   *
+   * Przebieg:
+   *   1. wycina kwadrat ze środka kadru (to, co obejmuje celownik),
+   *   2. co drugie wywołanie obraca go o 90 stopni,
+   *   3. oddaje canvas ZXingowi.
+   *
+   * @returns {string|null} treść kodu albo null, gdy w tej klatce nic nie ma
+   */
+  function decodeCurrentFrame() {
+    if (!barcodeReader || !ZX) {
+      return null;
+    }
+    var vw = video.videoWidth;
+    var vh = video.videoHeight;
+    if (!vw || !vh) {
+      return null;      // strumień jeszcze nie ruszył - nie ma czego czytać
+    }
+
+    // Kwadratowy wycinek ze środka kadru: 90% krótszego boku obrazu.
+    // Ograniczenie do 720 px trzyma czas dekodowania w ryzach na telefonie.
+    var side = Math.round(Math.min(vw, vh) * 0.9);
+    var out = Math.max(2, Math.min(720, side));
+    if (decodeCanvas.width !== out || decodeCanvas.height !== out) {
+      decodeCanvas.width = out;
+      decodeCanvas.height = out;
+    }
+
+    // Co druga klatka idzie do dekodera obrócona o 90 stopni. Czytnik kodów 1D
+    // skanuje obraz poziomymi liniami, więc kod z paskami w pionie odczyta się
+    // z klatki zwykłej, a kod z paskami w poziomie - z obróconej. Dzięki temu
+    // skanowanie działa w obu orientacjach bez obracania telefonu, a każda
+    // klatka kosztuje tyle samo co wcześniej (obrót robi się przy rysowaniu).
+    var rotate = rotateThisFrame;
+    rotateThisFrame = !rotateThisFrame;
+
+    decodeCtx.save();
+    var drawn = true;
+    try {
+      if (rotate) {
+        // obrót o 90 stopni w prawo wokół lewego górnego rogu, przesunięty
+        // o szerokość canvasa - kwadrat trafia dokładnie sam na siebie
+        decodeCtx.translate(out, 0);
+        decodeCtx.rotate(Math.PI / 2);
+      }
+      decodeCtx.drawImage(video, (vw - side) / 2, (vh - side) / 2, side, side, 0, 0, out, out);
+    } catch (e) {
+      drawn = false;
+    }
+    decodeCtx.restore();
+    if (!drawn) {
+      return null;
+    }
+
+    try {
+      // Standardowa ścieżka ZXinga: canvas -> mapa jasności -> obraz czarno-biały
+      var source = new ZX.HTMLCanvasElementLuminanceSource(decodeCanvas);
+      var bitmap = new ZX.BinaryBitmap(new ZX.HybridBinarizer(source));
+      var result = barcodeReader.decode(bitmap, decodeHints);
+      return result ? result.getText() : null;
+    } catch (e) {
+      // brak kodu w klatce to normalny stan, nie błąd - ZXing zgłasza to wyjątkiem
+      return null;
+    } finally {
+      try {
+        barcodeReader.reset();
+      } catch (e2) {
+        // reset czyści stan między klatkami, jest tylko porządkowy
+      }
+    }
+  }
+
+  // ===========================================================================
+  //  WARSTWA 2: APARAT
+  //
+  //  Zasada: żadnego ręcznego sterowania ostrością. Otwieramy właściwy
+  //  obiektyw i prosimy kamerę o jej własny autofokus ciągły z punktem
+  //  ostrości na środku kadru. Nic więcej.
+  //
+  //  Historia, żeby nikt nie próbował tego "poprawiać": wcześniejsze wersje
+  //  ustawiały focusMode: 'manual' i przemiatały focusDistance, szukając
+  //  najostrzejszego ustawienia. Działało to kiepsko, bo problemem nie była
+  //  ostrość, tylko obiektyw - facingMode: 'environment' otwierał na Androidzie
+  //  aparat bez autofokusu. Po wybraniu głównego obiektywu wszystko zadziałało
+  //  samo, a całe ręczne sterowanie poszło do kosza.
+  // ===========================================================================
+
+  /**
+   * Etykieta urządzenia albo pusty string.
+   * Przeglądarka podaje etykiety dopiero po przyznaniu dostępu do kamery,
+   * więc przed pierwszym getUserMedia wszystkie są puste.
+   *
+   * @param {MediaDeviceInfo} dev
+   * @returns {string}
+   */
+  function labelOf(dev) {
+    return (dev && dev.label) ? dev.label : '';
+  }
+
+  /**
+   * Czy etykieta opisuje aparat tylny.
+   * Najpierw odrzuca jawnie przednie, dopiero potem szuka słów "back"/"rear" -
+   * odwrotna kolejność myliłaby się przy etykietach zawierających oba słowa.
+   *
+   * @param {string} label
+   * @returns {boolean}
+   */
+  function isBackCamera(label) {
+    var l = label.toLowerCase();
+    if (l.indexOf('front') !== -1 || l.indexOf('user') !== -1 || l.indexOf('przedni') !== -1) {
+      return false;
+    }
+    return l.indexOf('back') !== -1 || l.indexOf('rear') !== -1 ||
+           l.indexOf('environment') !== -1 || l.indexOf('tyl') !== -1;
+  }
+
+  /**
+   * Odczytuje zapamiętany wybór obiektywu.
+   * localStorage potrafi rzucać wyjątkiem w trybie prywatnym, stąd try/catch.
+   *
+   * @returns {{deviceId: string, label: string}|null}
+   */
+  function loadSavedCamera() {
+    try {
+      var raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      var obj = JSON.parse(raw);
+      return (obj && (obj.deviceId || obj.label)) ? obj : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Zapamiętuje obiektyw wybrany ręcznie przyciskiem zmiany aparatu.
+   * Zapisujemy też etykietę, bo deviceId bywa unieważniany przez przeglądarkę
+   * (np. po wyczyszczeniu danych strony) i wtedy etykieta ratuje dopasowanie.
+   *
+   * @param {MediaDeviceInfo} dev
+   */
+  function saveCamera(dev) {
+    if (!dev) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        deviceId: dev.deviceId || '',
+        label: labelOf(dev)
+      }));
+    } catch (e) {
+      // brak localStorage - wybór po prostu nie będzie pamiętany między sesjami
+    }
+  }
+
+  /**
+   * Punktuje etykietę obiektywu: im wyżej, tym większa szansa, że to główny
+   * aparat z autofokusem. Używane tylko przy pierwszym uruchomieniu, gdy nie
+   * ma jeszcze zapamiętanego wyboru użytkownika.
+   *
+   * @param {string} label
+   * @returns {number} im więcej, tym lepszy kandydat
+   */
+  function cameraScore(label) {
+    var l = label.toLowerCase();
+    var score = 0;
+    var m = l.match(ANDROID_LABEL_RE);
+    if (m) {
+      // numer 0 to główny aparat; dalsze numery to zwykle obiektywy pomocnicze
+      score += (m[1] === '0') ? 40 : -parseInt(m[1], 10) * 4;
+    }
+    if (l.indexOf('ultra') !== -1) {
+      score -= 40;    // ultraszerokokątny - w wielu telefonach bez autofokusu
+    }
+    if (l.indexOf('tele') !== -1) {
+      score -= 20;    // teleobiektyw - nie złapie ostrości z bliska
+    }
+    if (l.indexOf('macro') !== -1) {
+      score -= 30;    // makro - stała ostrość na kilka centymetrów
+    }
+    if (l.indexOf('depth') !== -1 || l.indexOf('mono') !== -1 || l.indexOf('bokeh') !== -1) {
+      score -= 60;    // czujniki pomocnicze - obraz się do niczego nie nadaje
+    }
+    return score;
+  }
+
+  /**
+   * deviceId obiektywu otwartego w tej chwili (albo pusty string).
+   * @returns {string}
+   */
+  function currentDeviceId() {
+    if (!videoTrack || typeof videoTrack.getSettings !== 'function') {
+      return '';
+    }
+    try {
+      return videoTrack.getSettings().deviceId || '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /**
+   * Zamyka strumień z kamery i gasi diodę aktywności aparatu.
+   * Wywoływane przy zamknięciu skanera i przed każdą zmianą obiektywu -
+   * bez tego telefon trzymałby otwartych kilka kamer naraz.
+   */
+  function stopStream() {
+    if (mediaStream) {
+      var tracks = mediaStream.getTracks();
+      for (var i = 0; i < tracks.length; i++) {
+        try {
+          tracks[i].stop();
+        } catch (e) {
+          // strumień i tak zaraz przestaje istnieć
+        }
+      }
+      mediaStream = null;
+    }
+    videoTrack = null;
+    video.srcObject = null;
+  }
+
+  /**
+   * Czeka, aż element wideo pozna wymiary obrazu (videoWidth/videoHeight).
+   * Bez tego pierwsze klatki trafiłyby do dekodera puste.
+   * Zabezpieczenie czasowe 3 s: gdyby zdarzenie nie przyszło, ruszamy dalej
+   * zamiast zawiesić otwieranie skanera.
+   *
+   * @returns {Promise<void>}
+   */
+  function waitForVideo() {
+    return new Promise(function (resolve) {
+      if (video.readyState >= 2 && video.videoWidth) {
+        resolve();
+        return;
+      }
+      var done = false;
+      var finish = function () {
+        if (!done) {
+          done = true;
+          resolve();
+        }
+      };
+      video.addEventListener('loadedmetadata', finish, { once: true });
+      setTimeout(finish, 3000);
+    });
+  }
+
+  /**
+   * Włącza autofokus kamery dla świeżo otwartego strumienia.
+   *
+   * Prosi o tryb ciągły, a gdy kamera go nie zgłasza - o pojedyncze
+   * wyzwolenie (wtedy ustawia flagę singleShotNeeded i pętla skanowania
+   * wyzwala ostrość cyklicznie). Gdy kamera nie udostępnia nic, funkcja nie
+   * robi nic i zostaje własna automatyka aparatu - tak jest np. na iPhonie,
+   * gdzie Safari w ogóle nie daje sterowania ostrością, a autofokus i tak
+   * działa świetnie.
+   *
+   * Trybu 'manual' nie ustawiamy nigdy - zablokowałby ostrość na jednej
+   * odległości.
+   */
+  function enableAutoFocus() {
+    singleShotNeeded = false;
+    lastSingleShotTs = 0;
+    if (!videoTrack || typeof videoTrack.applyConstraints !== 'function') {
+      return;
+    }
+    var caps = {};
+    if (typeof videoTrack.getCapabilities === 'function') {
+      try {
+        caps = videoTrack.getCapabilities() || {};
+      } catch (e) {
+        caps = {};
+      }
+    }
+    var modes = Array.isArray(caps.focusMode) ? caps.focusMode : [];
+    var target = null;
+    if (modes.indexOf('continuous') !== -1) {
+      target = 'continuous';
+    } else if (modes.indexOf('single-shot') !== -1) {
+      target = 'single-shot';
+      singleShotNeeded = true;
+    }
+    if (!target) {
+      return;
+    }
+    var wish = { focusMode: target };
+    if (caps.pointsOfInterest) {
+      // punkt ostrości na środku kadru, czyli tam, gdzie celownik
+      wish.pointsOfInterest = [{ x: 0.5, y: 0.5 }];
+    }
+    // "advanced" oznacza prośbę best-effort: kamera może ją zignorować bez
+    // zgłaszania błędu, dlatego wynik nas nie interesuje
+    videoTrack.applyConstraints({ advanced: [wish] }).catch(function () {
+      // brak reakcji kamery nie jest błędem aplikacji
+    });
+  }
+
+  /**
+   * Odświeża napis z numerem aktywnego obiektywu. Napis pojawia się tylko
+   * wtedy, gdy telefon ma więcej niż jeden aparat tylny - przy jednym nie ma
+   * czego numerować.
+   */
+  function updateCameraInfo() {
+    cameraInfo.textContent = (cameraList.length > 1)
+      ? ('aparat ' + (cameraIndex + 1) + '/' + cameraList.length)
+      : '';
+  }
+
+  /**
+   * Otwiera kamerę i uruchamia podgląd.
+   *
+   * @param {string|null} deviceId konkretny obiektyw; null = niech przeglądarka
+   *                               sama wybierze tylny aparat (facingMode)
+   * @returns {Promise<boolean>} spełniona, gdy podgląd rusza; odrzucona przy
+   *                             braku zgody albo nieaktualnym deviceId
+   */
+  function openCamera(deviceId) {
+    stopStream();
+    // Wyższa rozdzielczość wymusza na Androidzie pełny profil kamery zamiast
+    // profilu "podglądowego", w którym sterownik bywa oszczędny z autofokusem
+    var videoWish = {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 30 }
+    };
+    if (deviceId) {
+      // exact, a nie ideal - chcemy dokładnie ten obiektyw albo błąd,
+      // po którym wywołujący wraca do wyboru domyślnego
+      videoWish.deviceId = { exact: deviceId };
+    } else {
+      videoWish.facingMode = { ideal: 'environment' };
+    }
+    return navigator.mediaDevices.getUserMedia({ video: videoWish }).then(function (stream) {
+      mediaStream = stream;
+      videoTrack = stream.getVideoTracks()[0] || null;
+      video.srcObject = stream;
+      var p = video.play();
+      if (p && p.catch) {
+        p.catch(function () {
+          // odtwarzanie i tak startuje z atrybutu autoplay
+        });
+      }
+      return waitForVideo();
+    }).then(function () {
+      enableAutoFocus();
+      updateCameraInfo();
+      return true;
+    });
+  }
+
+  /**
+   * Buduje listę aparatów tylnych i w razie potrzeby przełącza się na właściwy.
+   * Wywoływana raz, po pierwszym udanym otwarciu kamery - dopiero wtedy
+   * przeglądarka podaje etykiety urządzeń.
+   *
+   * Kolejność wyboru:
+   *   1. obiektyw zapamiętany ręcznym przełączeniem (decyzja użytkownika),
+   *   2. najlepszy według cameraScore, ale tylko gdy etykiety są androidowe,
+   *   3. nic - zostaje to, co wybrała przeglądarka (tak jest na iPhonie,
+   *      gdzie facingMode trafia dobrze i nie ma po co kombinować).
+   *
+   * @returns {Promise<*>} ewentualne ponowne otwarcie kamery
+   */
+  function buildCameraList() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      return Promise.resolve(null);
+    }
+    return navigator.mediaDevices.enumerateDevices().then(function (list) {
+      var vids = [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].kind === 'videoinput') {
+          vids.push(list[i]);
+        }
+      }
+      var back = [];
+      for (var j = 0; j < vids.length; j++) {
+        if (isBackCamera(labelOf(vids[j]))) {
+          back.push(vids[j]);
+        }
+      }
+      // gdy nie da się rozpoznać tylnych, pracujemy na pełnej liście
+      cameraList = back.length ? back : vids;
+      switchButton.hidden = cameraList.length < 2;
+
+      // ustal, który element listy jest w tej chwili otwarty
+      var curId = currentDeviceId();
+      cameraIndex = 0;
+      for (var k = 0; k < cameraList.length; k++) {
+        if (cameraList[k].deviceId && cameraList[k].deviceId === curId) {
+          cameraIndex = k;
+        }
+      }
+
+      // 1) wybór zapamiętany przyciskiem zmiany aparatu ma pierwszeństwo
+      var wantedIdx = -1;
+      var saved = loadSavedCamera();
+      if (saved) {
+        for (var s = 0; s < cameraList.length; s++) {
+          if (saved.deviceId && cameraList[s].deviceId === saved.deviceId) {
+            wantedIdx = s;
+            break;
+          }
+        }
+        if (wantedIdx === -1 && saved.label) {
+          // deviceId bywa unieważniany - awaryjnie dopasowujemy po etykiecie
+          for (var t = 0; t < cameraList.length; t++) {
+            if (labelOf(cameraList[t]) === saved.label) {
+              wantedIdx = t;
+              break;
+            }
+          }
+        }
+      }
+
+      // 2) nic nie zapamiętane - typujemy główny obiektyw po etykiecie
+      if (wantedIdx === -1 && cameraList.length > 1) {
+        var androidLabels = false;
+        for (var n = 0; n < cameraList.length; n++) {
+          if (ANDROID_LABEL_RE.test(labelOf(cameraList[n]))) {
+            androidLabels = true;
+          }
+        }
+        if (androidLabels) {
+          var bestIdx = 0;
+          for (var m = 1; m < cameraList.length; m++) {
+            if (cameraScore(labelOf(cameraList[m])) > cameraScore(labelOf(cameraList[bestIdx]))) {
+              bestIdx = m;
+            }
+          }
+          wantedIdx = bestIdx;
+        }
+      }
+
+      // 3) nic do zmiany - zostawiamy obiektyw, który już jest otwarty
+      if (wantedIdx === -1 || wantedIdx === cameraIndex || !cameraList[wantedIdx].deviceId) {
+        updateCameraInfo();
+        return null;
+      }
+      cameraIndex = wantedIdx;
+      return openCamera(cameraList[wantedIdx].deviceId);
+    }, function () {
+      // enumerateDevices odmówiło - skaner działa dalej na tym, co otwarte
+      return null;
+    });
+  }
+
+  // ===========================================================================
+  //  WARSTWA 3: PĘTLA SKANOWANIA
+  // ===========================================================================
+
+  /**
+   * Czyści napisy i blokuje przycisk zatwierdzenia - stan wyjściowy skanera.
+   * Wywoływane przy otwarciu i przy zmianie obiektywu.
+   */
+  function resetReadout() {
+    lastDecodedText = null;
+    codeDisplay.textContent = 'Szukam kodu...';
+    codeDisplay.classList.remove('bcsFound');
+    confirmButton.classList.remove('bcsReady');
+  }
+
+  /**
+   * Zatwierdza bieżący odczyt: oddaje kod aplikacji hosta i zamyka skaner.
+   * Wywoływane przyciskiem na dole ekranu albo automatycznie przy opcji
+   * autoClose.
+   */
+  function accept() {
+    if (!lastDecodedText) {
+      return;
+    }
+    var code = lastDecodedText;
+    callBack(opts.onScan, code);
+    close();
+  }
+
+  /**
+   * Pokazuje odczytany kod i odblokowuje przycisk zatwierdzenia.
+   *
+   * Pętla czyta ten sam kod kilka razy na sekundę, więc wibracja i onDetect
+   * odpalają się wyłącznie przy zmianie odczytu - inaczej telefon buczałby
+   * bez przerwy. Wibracja działa tylko na Androidzie; iOS nie ma Vibration API.
+   *
+   * @param {string} text treść odczytanego kodu
+   */
+  function showCode(text) {
+    var isNewCode = (text !== lastDecodedText);
+    lastDecodedText = text;
+    codeDisplay.textContent = text;
+    codeDisplay.classList.add('bcsFound');
+    confirmButton.classList.add('bcsReady');
+    if (!isNewCode) {
+      return;
+    }
+    if (opts.vibrate && navigator.vibrate) {
+      try {
+        navigator.vibrate(80);
+      } catch (e) {
+        // wibracja jest tylko dodatkiem, jej brak niczego nie psuje
+      }
+    }
+    callBack(opts.onDetect, text);
+    if (opts.autoClose) {
+      accept();
+    }
+  }
+
+  /**
+   * Ponawia pojedyncze wyzwolenie autofokusu - używane tylko na kamerach bez
+   * trybu ciągłego (flaga singleShotNeeded ustawiana w enableAutoFocus).
+   * Odstęp 1,5 s, żeby aparat nie "pompował" ostrością bez przerwy.
+   */
+  function retriggerSingleShot() {
+    var now = Date.now();
+    if (now - lastSingleShotTs < 1500 || !videoTrack) {
+      return;
+    }
+    lastSingleShotTs = now;
+    videoTrack.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] }).catch(function () {
+      // prośba best-effort, brak reakcji kamery ignorujemy
+    });
+  }
+
+  /**
+   * Serce skanera: jedna klatka co 110 ms.
+   *
+   * Świadomie setTimeout, a nie requestAnimationFrame - nie zależy nam na
+   * synchronizacji z odświeżaniem ekranu, tylko na stałym, oszczędnym tempie.
+   * Pętla kończy się sama, gdy scannerActive zejdzie na false (close).
+   */
+  function scanTick() {
+    if (!scannerActive) {
+      return;
+    }
+    if (video.readyState >= 2) {
+      var text = decodeCurrentFrame();
+      if (text) {
+        showCode(text);
+      } else if (singleShotNeeded) {
+        retriggerSingleShot();
+      }
+    }
+    scanTimer = setTimeout(scanTick, 110);
+  }
+
+  // ===========================================================================
+  //  BLOKADA OBROTU EKRANU
+  // ===========================================================================
+
+  /**
+   * Blokuje orientację ekranu na czas skanowania.
+   *
+   * Chrome pozwala na blokadę wyłącznie w trybie pełnoekranowym, dlatego
+   * najpierw prosimy o pełny ekran dla samej nakładki skanera. Obie prośby
+   * muszą wyjść prosto z kliknięcia użytkownika - dlatego open() woła tę
+   * funkcję od razu na wejściu, przed pobieraniem ZXinga i kamery.
+   *
+   * Blokujemy w orientacji bieżącej, żeby obraz nie przeskoczył w chwili
+   * otwarcia skanera.
+   *
+   * iPhone: Safari nie ma Screen Orientation API ani pełnego ekranu dla
+   * dowolnego elementu, więc funkcja po cichu nic nie zmienia. To świadome -
+   * skaner ma tam działać normalnie, tylko bez blokady.
+   */
+  function lockScreenOrientation() {
+    var request = overlay.requestFullscreen || overlay.webkitRequestFullscreen;
+    var started = null;
+    try {
+      started = request ? request.call(overlay) : null;
+    } catch (e) {
+      started = null;
+    }
+    Promise.resolve(started).then(function () {
+      if (!window.screen || !screen.orientation || !screen.orientation.lock) {
+        return null;
+      }
+      return screen.orientation.lock(screen.orientation.type || 'portrait');
+    }).catch(function () {
+      // brak wsparcia albo odmowa - skaner działa dalej, tylko bez blokady
+    });
+  }
+
+  /**
+   * Zdejmuje blokadę orientacji i wychodzi z pełnego ekranu.
+   * Wywoływane przy zamykaniu skanera, żeby aplikacja hosta zachowywała się
+   * tak jak przed otwarciem skanera.
+   */
+  function unlockScreenOrientation() {
+    try {
+      if (window.screen && screen.orientation && screen.orientation.unlock) {
+        screen.orientation.unlock();
+      }
+    } catch (e) {
+      // blokady mogło w ogóle nie być
+    }
+    var exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit && (document.fullscreenElement || document.webkitFullscreenElement)) {
+      try {
+        var p = exit.call(document);
+        if (p && p.catch) {
+          p.catch(function () {
+            // wyjście z pełnego ekranu nastąpi i tak przy zamknięciu nakładki
+          });
+        }
+      } catch (e) {
+        // jak wyżej
+      }
+    }
+  }
+
+  // ===========================================================================
+  //  OTWIERANIE, ZAMYKANIE I PRZEŁĄCZANIE
+  // ===========================================================================
+
+  /**
+   * Łączy opcje domyślne z podanymi przy wywołaniu open().
+   *
+   * @param {Object|null} userOptions
+   * @returns {Object} komplet opcji dla bieżącego otwarcia
+   */
+  function mergeOptions(userOptions) {
+    var merged = {};
+    var k;
+    for (k in defaults) {
+      if (Object.prototype.hasOwnProperty.call(defaults, k)) {
+        merged[k] = defaults[k];
+      }
+    }
+    if (userOptions) {
+      for (k in userOptions) {
+        if (Object.prototype.hasOwnProperty.call(userOptions, k)) {
+          merged[k] = userOptions[k];
+        }
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * Otwiera skaner: pokazuje nakładkę, blokuje obrót, pobiera ZXing (raz na
+   * życie strony), uruchamia kamerę i startuje pętlę skanowania.
+   *
+   * Wybór obiektywu na starcie:
+   *   - lista zbudowana w tej sesji  -> ostatnio używany obiektyw,
+   *   - świeże wejście na stronę     -> obiektyw zapamiętany w localStorage,
+   *   - nic z powyższych             -> wybór przeglądarki (facingMode).
+   * Gdy zapamiętany deviceId okaże się nieaktualny, wracamy do wyboru
+   * domyślnego zamiast pokazywać błąd.
+   *
+   * WAŻNE: wywołuj prosto z kliknięcia użytkownika - inaczej przeglądarka
+   * odmówi pełnego ekranu, a bez niego nie zadziała blokada obrotu.
+   *
+   * @param {Object} [userOptions] opcje opisane w nagłówku pliku
+   * @returns {Promise<boolean>} true, gdy skaner ruszył
+   */
+  function open(userOptions) {
+    if (scannerActive) {
+      return Promise.resolve(false);
+    }
+    opts = mergeOptions(userOptions);
+
+    resetReadout();
+    cameraInfo.textContent = 'Uruchamiam aparat...';
+    switchButton.hidden = cameraList.length < 2;
+    overlay.classList.add('bcsActive');
+    scannerActive = true;
+    if (opts.lockOrientation) {
+      lockScreenOrientation();
+    }
+
+    return loadZXing().then(function (lib) {
+      ZX = lib;
+      buildReader();
+
+      var startId = null;
+      if (cameraList.length && cameraList[cameraIndex]) {
+        startId = cameraList[cameraIndex].deviceId;
+      } else {
+        var savedStart = loadSavedCamera();
+        if (savedStart && savedStart.deviceId) {
+          startId = savedStart.deviceId;
+        }
+      }
+
+      return openCamera(startId).catch(function (err) {
+        if (!startId) {
+          throw err;   // nie mamy planu awaryjnego - to prawdziwy błąd dostępu
+        }
+        // zapamiętany obiektyw może być już nieaktualny - wracamy do domyślnego
+        return openCamera(null);
+      });
+    }).then(function () {
+      // listę budujemy raz na życie strony, po uzyskaniu zgody na kamerę
+      if (!cameraList.length) {
+        return buildCameraList();
+      }
+      return null;
+    }).then(function () {
+      if (scannerActive) {
+        updateCameraInfo();
+        scanTick();
+      }
+      return true;
+    }).catch(function (err) {
+      // nakładka zostaje otwarta z komunikatem, żeby użytkownik mógł ją zamknąć
+      codeDisplay.textContent = 'Nie udało się uruchomić skanera.';
+      cameraInfo.textContent = (err && err.name) ? err.name : String(err);
+      callBack(opts.onError, err);
+      return false;
+    });
+  }
+
+  /**
+   * Zamyka skaner: zatrzymuje pętlę, zwalnia kamerę, zdejmuje blokadę obrotu
+   * i chowa nakładkę. Kolejność ma znaczenie - najpierw gasimy pętlę, żeby nie
+   * próbowała czytać z zamkniętego już strumienia.
+   */
+  function close() {
+    if (!scannerActive) {
+      return;
+    }
+    scannerActive = false;
+    if (scanTimer) {
+      clearTimeout(scanTimer);
+      scanTimer = null;
+    }
+    stopStream();
+    if (opts.lockOrientation) {
+      unlockScreenOrientation();
+    }
+    overlay.classList.remove('bcsActive');
+    callBack(opts.onClose, null);
+  }
+
+  /**
+   * Przełącza na kolejny obiektyw z listy (cyklicznie) i zapamiętuje wybór,
+   * żeby następne otwarcie skanera startowało od razu na nim.
+   * Ręczna decyzja użytkownika jest ważniejsza niż automatyczne typowanie
+   * po etykiecie - patrz buildCameraList.
+   */
+  function switchCamera() {
+    if (cameraList.length < 2 || !scannerActive) {
+      return;
+    }
+    cameraIndex = (cameraIndex + 1) % cameraList.length;
+    resetReadout();
+    cameraInfo.textContent = 'Przełączam aparat...';
+    openCamera(cameraList[cameraIndex].deviceId).then(function () {
+      saveCamera(cameraList[cameraIndex]);
+    }).catch(function () {
+      cameraInfo.textContent = 'Nie udało się otworzyć tego aparatu';
+    });
+  }
+
+  // ===========================================================================
+  //  PODPIĘCIE PRZYCISKÓW I UDOSTĘPNIENIE API
+  // ===========================================================================
+
+  opts = mergeOptions(null);      // żeby opts nigdy nie było puste
+
+  closeButton.addEventListener('click', function () {
+    close();
+  });
+  switchButton.addEventListener('click', switchCamera);
+  confirmButton.addEventListener('click', accept);
+
+  // Jedyna rzecz, jaką ten plik wystawia na zewnątrz
+  window.BarcodeScanner = {
+    version: VERSION,
+    open: open,
+    close: close,
+    isOpen: function () {
+      return scannerActive;
+    },
+    defaults: defaults
+  };
+})();
+</script>

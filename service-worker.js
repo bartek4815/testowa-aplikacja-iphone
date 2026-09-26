@@ -16,13 +16,17 @@
  *  trzyma ją we własnym cache HTTP.
  */
 
-var CACHE_NAME = 'testowa-aplikacja-v12';
+var CACHE_NAME = 'skaner-kodow-kreskowych-v13';
 
 // Pliki wgrywane do cache przy instalacji. './' to sam adres katalogu -
 // pod nim otwiera się aplikacja dodana do ekranu głównego.
+// index.html tylko przekierowuje na demo.html, ale musi tu być, bo starsze
+// skróty na ekranie głównym telefonu wskazują właśnie na niego.
 var urlsToCache = [
   './',
   './index.html',
+  './demo.html',
+  './skaner_kodow_kreskowych.html',
   './manifest.json'
 ];
 
